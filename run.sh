@@ -8,7 +8,7 @@ echo "ssh port:"$SSHPORT
 
 qemu-system-x86_64 \
 	--enable-kvm \
-	-m 1024 \
+	-m 4096 \
 	-boot order=d \
 	-bios ./OVMF.fd \
 	-gdb tcp::$GDBPORT \
