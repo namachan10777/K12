@@ -1,3 +1,4 @@
-/ARCH_*
-/K12
-/OVMF.fd
+/vm/ARCH_*
+/vm/K12
+/vm/OVMF.fd
+/vm/*.iso
