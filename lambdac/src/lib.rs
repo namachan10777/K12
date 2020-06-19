@@ -23,7 +23,7 @@ pub enum Stmt {
     Nop,
     If(Expr, Vec<Stmt>, Vec<Stmt>),
     Loop(Vec<Stmt>),
-    Let(String, Box<Expr>),
+    Let(String, Expr),
     Break,
     Continue,
     Return(Vec<Expr>),

@@ -15,18 +15,9 @@ Int: i32 = <s:r"[0-9]+"> => i32::from_str(s).unwrap();
 Bool: bool = <s:r"true|false"> => bool::from_str(s).unwrap();
 Str: String = <s:r##""(\\"|.)*""##> => { String::from(s)};
 
-pub CallArgs: Vec<Expr> = {
+CallArgs: Vec<Expr> = {
 	<e:Expr> => vec![e],
 	<mut args:CallArgs> "," <e: Expr> => {args.push(e); args}
-};
-
-pub Term: Expr = {
-	<n:Int> => Expr::Int(n),
-	<b:Bool> => Expr::Bool(b),
-	<s:Str> => Expr::Str(s),
-	"(" <e:Expr> ")" => e,
-	"!" <e:Term> => Expr::Not(Box::new(e)),
-	<id:Id> "(" <args:CallArgs> ")" => Expr::Call(id, args),
 };
 
 pub Expr: Expr = {
@@ -36,10 +27,38 @@ pub Expr: Expr = {
 	Factor
 };
 
-pub Factor: Expr = {
+Factor: Expr = {
 	<l:Factor> "*" <r:Term> => Expr::Mul(Box::new(l), Box::new(r)),
 	<l:Factor> "/" <r:Term> => Expr::Div(Box::new(l), Box::new(r)),
 	<l:Factor> "%" <r:Term> => Expr::Mod(Box::new(l), Box::new(r)),
 	<l:Factor> "&&" <r:Term> => Expr::And(Box::new(l), Box::new(r)),
 	Term
 };
+
+Term: Expr = {
+	<n:Int> => Expr::Int(n),
+	<b:Bool> => Expr::Bool(b),
+	<s:Str> => Expr::Str(s),
+	"(" <e:Expr> ")" => e,
+	"!" <e:Term> => Expr::Not(Box::new(e)),
+	<id:Id> "(" <args:CallArgs> ")" => Expr::Call(id, args),
+};
+
+Stmts: Vec<Stmt> = {
+	<mut ss:Stmts> <s:Stmt> => { ss.push(s); ss }
+}
+
+ReturnValues: Vec<Expr> = {
+	";" => vec![],
+	<e:Expr> ";" => vec![e],
+	<mut es:ReturnValues> <e:Expr> ";" => {es.push(e); es}
+}
+
+pub Stmt: Stmt = {
+	"let" <id:Id> "=" <expr:Expr> ";" => Stmt::Let(id, expr),
+	"if" "(" <cond:Expr> ")" "{" <ss1:Stmts> "}" => Stmt::If(cond, ss1, vec![Stmt::Nop]),
+	"if" "(" <cond:Expr> ")" "{" <ss1:Stmts> "}" "else" "{" <ss2:Stmts> "}"=> Stmt::If(cond, ss1, ss2),
+	"break;"=> Stmt::Break,
+	"continue;"=> Stmt::Continue,
+	"return" <es:ReturnValues> => Stmt::Return(es),
+}
