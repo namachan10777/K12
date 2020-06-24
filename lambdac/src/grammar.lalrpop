@@ -48,17 +48,11 @@ Stmts: Vec<Stmt> = {
 	<mut ss:Stmts> <s:Stmt> => { ss.push(s); ss }
 }
 
-ReturnValues: Vec<Expr> = {
-	";" => vec![],
-	<e:Expr> ";" => vec![e],
-	<mut es:ReturnValues> <e:Expr> ";" => {es.push(e); es}
-}
-
 pub Stmt: Stmt = {
 	"let" <id:Id> "=" <expr:Expr> ";" => Stmt::Let(id, expr),
 	"if" "(" <cond:Expr> ")" "{" <ss1:Stmts> "}" => Stmt::If(cond, ss1, vec![Stmt::Nop]),
 	"if" "(" <cond:Expr> ")" "{" <ss1:Stmts> "}" "else" "{" <ss2:Stmts> "}"=> Stmt::If(cond, ss1, ss2),
 	"break;"=> Stmt::Break,
 	"continue;"=> Stmt::Continue,
-	"return" <es:ReturnValues> => Stmt::Return(es),
+	"return" <e:Expr> ";" => Stmt::Return(e),
 }

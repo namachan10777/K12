@@ -26,7 +26,7 @@ pub enum Stmt {
     Let(String, Expr),
     Break,
     Continue,
-    Return(Vec<Expr>),
+    Return(Expr),
 }
 
 #[cfg(test)]
