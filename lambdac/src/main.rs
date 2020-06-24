@@ -14,6 +14,6 @@ fn main() {
     let fname = matches.value_of("SOURCE").unwrap();
     let src = fs::read_to_string(fname).unwrap();
     let parsed = lambdac::parser::f(&src);
-    let alpha = lambdac::alpha::f(&lambdac::alpha::Env::new(), &parsed);
+    let alpha = lambdac::alpha::f(parsed);
     println!("{:#?}", alpha);
 }

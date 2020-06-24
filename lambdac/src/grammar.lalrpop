@@ -33,6 +33,7 @@ pub Sexp: Sexp = {
 	"'(" <ss:Sexps> ")" => Sexp::List(ss),
 	"(" "if" <cond:Sexp> <expr_then:Sexp> <expr_else:Sexp> ")" => Sexp::If(Box::new(cond), Box::new(expr_then), Box::new(expr_else)),
 	"(" "let" <id:Id> <def:Sexp> <expr:Sexp> ")" => Sexp::Let(id, Box::new(def), Box::new(expr)),
+	"(" "letrec" <id:Id> <def:Sexp> <expr:Sexp> ")" => Sexp::Let(id, Box::new(def), Box::new(expr)),
 	"(" "lambda" "(" <args:Args> ")" <expr:Sexp> ")" => Sexp::Lambda(args, Box::new(expr)),
 	"(" <id:Id> <ss:Sexps> ")" => Sexp::Call(id, ss),
 }
