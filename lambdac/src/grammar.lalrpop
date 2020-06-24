@@ -1,5 +1,5 @@
 use std::str::FromStr;
-use super::{Expr, Stmt};
+use super::{Sexp};
 
 grammar;
 
@@ -13,46 +13,26 @@ else {
 Id: String = <s:r"[a-zA-Z][a-zA-Z0-9]*"> => String::from(s);
 Int: i32 = <s:r"[0-9]+"> => i32::from_str(s).unwrap();
 Bool: bool = <s:r"true|false"> => bool::from_str(s).unwrap();
-Str: String = <s:r##""(\\"|.)*""##> => { String::from(s)};
+Str: String = <s:r##""(\\"|.)*""##> => String::from(&s[1..s.len()-1]);
 
-CallArgs: Vec<Expr> = {
-	<e:Expr> => vec![e],
-	<mut args:CallArgs> "," <e: Expr> => {args.push(e); args}
-};
-
-pub Expr: Expr = {
-	<l:Expr> "+" <r:Factor> => Expr::Add(Box::new(l), Box::new(r)),
-	<l:Expr> "-" <r:Factor> => Expr::Sub(Box::new(l), Box::new(r)),
-	<l:Expr> "||" <r:Factor> => Expr::Or(Box::new(l), Box::new(r)),
-	Factor
-};
-
-Factor: Expr = {
-	<l:Factor> "*" <r:Term> => Expr::Mul(Box::new(l), Box::new(r)),
-	<l:Factor> "/" <r:Term> => Expr::Div(Box::new(l), Box::new(r)),
-	<l:Factor> "%" <r:Term> => Expr::Mod(Box::new(l), Box::new(r)),
-	<l:Factor> "&&" <r:Term> => Expr::And(Box::new(l), Box::new(r)),
-	Term
-};
-
-Term: Expr = {
-	<n:Int> => Expr::Int(n),
-	<b:Bool> => Expr::Bool(b),
-	<s:Str> => Expr::Str(s),
-	"(" <e:Expr> ")" => e,
-	"!" <e:Term> => Expr::Not(Box::new(e)),
-	<id:Id> "(" <args:CallArgs> ")" => Expr::Call(id, args),
-};
-
-Stmts: Vec<Stmt> = {
-	<mut ss:Stmts> <s:Stmt> => { ss.push(s); ss }
+Sexps: Vec<Sexp> = {
+	=> Vec::new(),
+	<mut ss:Sexps> <s:Sexp> => { ss.push(s); ss }
 }
 
-pub Stmt: Stmt = {
-	"let" <id:Id> "=" <expr:Expr> ";" => Stmt::Let(id, expr),
-	"if" "(" <cond:Expr> ")" "{" <ss1:Stmts> "}" => Stmt::If(cond, ss1, vec![Stmt::Nop]),
-	"if" "(" <cond:Expr> ")" "{" <ss1:Stmts> "}" "else" "{" <ss2:Stmts> "}"=> Stmt::If(cond, ss1, ss2),
-	"break;"=> Stmt::Break,
-	"continue;"=> Stmt::Continue,
-	"return" <e:Expr> ";" => Stmt::Return(e),
+pub Args: Vec<String> = {
+	=> Vec::new(),
+	<mut args:Args> <arg:Id> => { args.push(arg); args }
+}
+
+pub Sexp: Sexp = {
+	<n:Int> => Sexp::Int(n),
+	<b:Bool> => Sexp::Bool(b),
+	<s:Str> => Sexp::Str(s),
+	<var:Id> => Sexp::Var(var),
+	"'(" <ss:Sexps> ")" => Sexp::List(ss),
+	"(" "if" <cond:Sexp> <expr_then:Sexp> <expr_else:Sexp> ")" => Sexp::If(Box::new(cond), Box::new(expr_then), Box::new(expr_else)),
+	"(" "let" <id:Id> <def:Sexp> <expr:Sexp> ")" => Sexp::Let(id, Box::new(def), Box::new(expr)),
+	"(" "lambda" "(" <args:Args> ")" <expr:Sexp> ")" => Sexp::Lambda(args, Box::new(expr)),
+	"(" <id:Id> <ss:Sexps> ")" => Sexp::Call(id, ss),
 }
