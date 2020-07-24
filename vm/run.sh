@@ -10,7 +10,7 @@ qemu-system-x86_64 \
 	--enable-kvm \
 	-m 4096 \
 	-boot order=d \
-	-bios ./OVMF.fd \
+	-bios /usr/share/ovmf/x64/OVMF.fd \
 	-gdb tcp::$GDBPORT \
 	-net user,hostfwd=tcp::$SSHPORT-:22 -net nic \
 	./K12
