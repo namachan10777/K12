@@ -198,7 +198,7 @@ ParseResult parse_impl(int count, const char *input) {
 		if (*input == '}') {
 			result.type = SUCCESS;
 			result.used = (long long)input - (long long)origin + 1;
-			result.value.type = ARRAY;
+			result.value.type = OBJECT;
 			result.value.arrary.len = 0;
 			result.value.arrary.arr = NULL;
 			return result;
