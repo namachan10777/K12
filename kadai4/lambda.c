@@ -1,7 +1,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <linux/kallsyms.h>
 #include <linux/module.h>
+#include <linux/syscalls.h>
 #include <linux/fs.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -305,37 +305,38 @@ ParseResult parse(const char *input, int count) {
 	return result;
 }
 
-int stringify_impl(char *buf, int buf_size, JSONValue json) {
+int stringify_impl(char *buf, int indent_count, int pp_mode, int buf_size, JSONValue json) {
+	int offset=0;
+	int i=0, j=0;
 	if (buf_size < 1) return -1;
+
 	if (json.type == STRING) {
-		int cursor = 1, i;
-		buf[0] = '"';
+		buf[offset++] = '"';
 		for (i=0; i<json.string.len; ++i) {
 			if (json.string.buf[i] == '"') {
-				if (cursor+2 >= buf_size) return -1;
-				buf[cursor++] = '\\';
-				buf[cursor++] = '"';
+				if (offset+2 >= buf_size) return -1;
+				buf[offset++] = '\\';
+				buf[offset++] = '"';
 			}
 			else if (json.string.buf[i] == '\\') {
-				if (cursor+2 >= buf_size) return -1;
-				buf[cursor++] = '\\';
-				buf[cursor++] = '\\';
+				if (offset+2 >= buf_size) return -1;
+				buf[offset++] = '\\';
+				buf[offset++] = '\\';
 			}
 			else {
-				if (cursor+1 >= buf_size) return -1;
-				buf[cursor++] = json.string.buf[i];
+				if (offset+1 >= buf_size) return -1;
+				buf[offset++] = json.string.buf[i];
 			}
 		}
-		if (cursor+1 >= buf_size) return -1;
-		buf[cursor++] = '\"';
-		return cursor;
+		if (offset+1 >= buf_size) return -1;
+		buf[offset++] = '\"';
+		return offset;
 	}
 	else if (json.type == INTEGER) {
-		int i=0;
 		int base = 1;
 		int abs = json.integer > 0 ? json.integer : -json.integer;
 		char tmp[1024];
-		int j=0, k;
+		int k;
 		if (i >= buf_size-1) return -1;
 		if (json.integer < 0)
 			buf[i++] = '-';
@@ -350,57 +351,105 @@ int stringify_impl(char *buf, int buf_size, JSONValue json) {
 		return j+i;
 	}
 	else if (json.type == ARRAY) {
-		int offset = 1;
-		int i;
 		if (buf_size < 1) return -1;
-		buf[0] = '[';
+		for (i=0; i<indent_count; ++i) {
+			if (buf_size - offset <= 0)
+				return -1;
+			buf[offset++] = ' ';
+		}
+		buf[offset++] = '[';
+		if (pp_mode)
+			buf[offset++] = '\n';
 		for (i=0; i<json.arrary.len; ++i) {
 			int s;
+			for (j=0; j<indent_count+2; ++j) {
+				if (buf_size - offset <= 0)
+					return -1;
+				buf[offset++] = ' ';
+			}
 			if (buf_size - offset < 1) return -1;
-			s = stringify_impl(buf + offset, buf_size-1, json.arrary.arr[i]);
+			s = stringify_impl(buf + offset, indent_count+2, pp_mode, buf_size-1, json.arrary.arr[i]);
 			if (s == -1) return -1;
 			offset += s;
 			if (i < json.arrary.len-1) {
-				if (buf_size - offset < 2) return -1;
+				if (buf_size - offset < (pp_mode ? 3 : 2)) return -1;
 				buf[offset++] = ',';
+				if (pp_mode)
+					buf[offset++] = '\n';
+			}
+			else {
+				if (pp_mode)
+					buf[offset++] = '\n';
 			}
 		}
 		if (buf_size - offset < 1) return -1;
 		buf[offset++] = ']';
+		for (i=0; i<indent_count; ++i) {
+			if (buf_size - offset <= 0)
+				return -1;
+			buf[offset++] = ' ';
+		}
 		return offset;
 	}
-	else if (json.type == OBJECT ) {
-		int offset = 1;
-		int i, j;
+	else if (json.type == OBJECT) {
 		if (buf_size < 1) return -1;
-		buf[0] = '{';
+		for (i=0; i<indent_count; ++i) {
+			if (buf_size - offset <= 0)
+				return -1;
+			buf[offset++] = ' ';
+		}
+		buf[offset++] = '{';
+		if (pp_mode)
+			buf[offset++] = '\n';
 		for (i=0; i<json.pairs.len; ++i) {
 			int s;
-			buf[offset] = '"';
-			for (j=0; json.pairs.pairs[i].key[j] != '\0'; ++j) {
-				buf[++offset] = json.pairs.pairs[i].key[j];
+			for (j=0; j<indent_count+2; ++j) {
+				if (buf_size - offset <= 0)
+					return -1;
+				buf[offset++] = ' ';
 			}
-			if (buf_size - offset < 2) return -1;
-			buf[++offset] = '"';
-			buf[++offset] = ':';
-			++offset;
-			s = stringify_impl(buf + offset, buf_size-offset, json.pairs.pairs[i].value);
+			buf[offset++] = '"';
+			for (j=0; json.pairs.pairs[i].key[j] != '\0'; ++j) {
+				buf[offset++] = json.pairs.pairs[i].key[j];
+			}
+			if (buf_size - offset < (pp_mode ? 4 : 2)) return -1;
+			buf[offset++] = '"';
+			if (pp_mode)
+				buf[offset++] = ' ';
+			buf[offset++] = ':';
+			if (pp_mode)
+				buf[offset++] = ' ';
+			s = stringify_impl(buf + offset, indent_count+2, pp_mode, buf_size-offset, json.pairs.pairs[i].value);
+
 			if (s == -1) return -1;
 			offset += s;
 			if (i < json.arrary.len-1) {
-				if (buf_size - offset < 2) return -1;
+				if (buf_size - offset < (pp_mode ? 3 : 2)) return -1;
 				buf[offset++] = ',';
+				if (pp_mode)
+					buf[offset++] = '\n';
 			}
+			else {
+				if (buf_size - offset < (pp_mode ? 2 : 1)) return -1;
+				if (pp_mode)
+					buf[offset++] = '\n';
+			}
+			buf[offset+1] = '\0';
+			printk("%s\n", buf);
 		}
 		if (buf_size - offset < 1) return -1;
+		for (i=0; i<indent_count; ++i) {
+			if (buf_size - offset <= 0)
+				return -1;
+			buf[offset++] = ' ';
+		}
 		buf[offset++] = '}';
 		return offset;
 	}
 	else if (json.type == BOOLEAN) {
 		if (json.boolean) {
-			int i;
 			char src[] = "true";
-			if (buf_size < sizeof(src)) return -1;
+			if (buf_size <= sizeof(src) + offset) return -1;
 			for (i = 0; i < sizeof(src); ++i) {
 				buf[i] = src[i];
 			}
@@ -408,8 +457,7 @@ int stringify_impl(char *buf, int buf_size, JSONValue json) {
 		}
 		else {
 			char src[] = "false";
-			int i;
-			if (buf_size < sizeof(src)) return -1;
+			if (buf_size <= sizeof(src) + offset) return -1;
 			for (i = 0; i < sizeof(src); ++i) {
 				buf[i] = src[i];
 			}
@@ -422,7 +470,7 @@ int stringify_impl(char *buf, int buf_size, JSONValue json) {
 }
 
 int stringify(char *buf, int buf_size, JSONValue json) {
-	int len = stringify_impl(buf, buf_size-1, json);
+	int len = stringify_impl(buf, 0, 1, buf_size-1, json);
 	if (len >= 0) {
 		buf[len] = '\0';
 		return len+1;
@@ -778,52 +826,16 @@ int load(struct JsonValue* out, struct JsonValue *json) {
 }
 
 
-static void **syscall_table;
-asmlinkage long (*orig_read)(int magic1, int magic2, unsigned int cmd, void __user *arg);
-asmlinkage long syscall_replace_read(int magic1, int magic2, unsigned int cmd, void __user *arg) {
-	if (read_hook != NULL) {
+extern void (*read_hooks[2])(void);
+
+asmlinkage void syscall_read_begin_hook(void) {
+	/*if (read_hook != NULL) {
 		exec(out, read_hook);
-	}
-	return (*orig_read)(magic1, magic2, cmd, arg);
+	}*/
+	printk("hooked\n");
+	return;
 }
 
-static void save_original_syscall_address(void) {
-	pr_info("read original address 0x%p + 0x%d\n", syscall_table, __NR_read);
-	//orig_read = syscall_table[__NR_read];
-}
-
-static void change_page_attr_to_rw(pte_t *pte) {
-	set_pte_atomic(pte, pte_mkwrite(*pte));
-}
-
-static void change_page_attr_to_ro(pte_t *pte) {
-	set_pte_atomic(pte, pte_clear_flags(*pte, _PAGE_RW));
-}
-
-static void replace_syscall(void *new) {
-	unsigned int level = 0;
-	pte_t *pte;
-	/*
-	pte = lookup_address((unsigned long) syscall_table, &level);
-	change_page_attr_to_rw(pte);
-	syscall_table[__NR_read] = syscall_replace_read;
-	change_page_attr_to_ro(pte);*/
-}
-
-static int syscall_replace_init(void) {
-	syscall_table = (void**)0xffffffff81e00280;
-	pr_info("sys_call_table address is 0x%p\n", syscall_table);
-	save_original_syscall_address();
-	replace_syscall(syscall_replace_read);
-	pr_info("system call replaced\n");
-	return 0;
-}
-
-static void syscall_replace_cleanup(void) {
-	pr_info("cleanup");
-	if (orig_read)
-		replace_syscall(orig_read);
-}
 
 char srcbuf[1024];
 size_t len;
@@ -867,15 +879,22 @@ static ssize_t lambda_write(struct file *file, const char __user *buf, size_t co
 
 static ssize_t lambda_read(struct file *file, char __user *buf, size_t count, loff_t *f_pos) {
 	struct runtime_info_t *info = file->private_data;
+	struct JsonValue *result;
 	long long len;
 	printk("lambda read\n");
 	if (!access_ok(buf, count)) {
 		return 0;
 	}
+	result = eval(out, &info->json);
 	len = stringify(buf, count, info->json);
 	printk("stringified %lld %d %d\n", len, info->json.type, info->tag);
 	if (len < 0) return 0;
 	return 0;
+}
+
+static long lambda_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+    return 0;
 }
 
 struct file_operations s_lambda_fops = {
@@ -883,18 +902,20 @@ struct file_operations s_lambda_fops = {
 	.release	= lambda_release,
 	.read		= lambda_read,
 	.write		= lambda_write,
+	.unlocked_ioctl = lambda_ioctl,
+	.compat_ioctl = lambda_ioctl,
 };
 
 static int lambda_init(void) {
 	printk("Hello lambda\n");
+	printk("hooks 0x%p\n", (void*)read_hooks[0]);
+	//read_hooks[0] = syscall_read_begin_hook;
 	register_chrdev(DRIVER_MEJOR, DRIVER_NAME, &s_lambda_fops);
-	syscall_replace_init();
 	return 0;
 }
 
 static void lambda_exit(void) {
 	printk("Goodbye lambda\n");
-	syscall_replace_cleanup();
 	unregister_chrdev(DRIVER_MEJOR, DRIVER_NAME);
 }
 
@@ -904,5 +925,3 @@ module_exit(lambda_exit);
 MODULE_DESCRIPTION("lambda");
 MODULE_AUTHOR("namachan10777");
 MODULE_LICENSE("GPL");
-
-
