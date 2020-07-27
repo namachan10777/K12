@@ -1,0 +1,32 @@
+{
+	"type": "probe",
+	"hooks": [
+		{
+			"target": "hook.syscall.read.begin",
+			"exec": {
+				"type": "assign",
+				"target": "value.out[value.sys.syscall.read.caller]",
+				"value": "value.sys.time"
+			}
+		},
+		{
+			"target": "hook.syscall.read.end",
+			"exec": {
+				"type": "assign",
+				"target": "value.out[value.sys.syscall.read.caller]",
+				"value": {
+					"type": "op",
+					"op": "sub",
+					"lhr": {
+						"type": "ref",
+						"name": "value.out[value.sys.syscall.read.caller]"
+					},
+					"rhr": {
+						"type": "ref",
+						"name": "value.sys.time"
+					}
+				}
+			}
+		}
+	]
+}
