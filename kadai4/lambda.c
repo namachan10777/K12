@@ -1,5 +1,6 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#include <linux/kallsyms.h>
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/types.h>
@@ -777,7 +778,7 @@ int load(struct JsonValue* out, struct JsonValue *json) {
 }
 
 
-static void **syscall_table = (void *) 0xffffffff81e00280;
+static void **syscall_table;
 asmlinkage long (*orig_read)(int magic1, int magic2, unsigned int cmd, void __user *arg);
 asmlinkage long syscall_replace_read(int magic1, int magic2, unsigned int cmd, void __user *arg) {
 	if (read_hook != NULL) {
@@ -787,7 +788,8 @@ asmlinkage long syscall_replace_read(int magic1, int magic2, unsigned int cmd, v
 }
 
 static void save_original_syscall_address(void) {
-	orig_read = syscall_table[__NR_read];
+	pr_info("read original address 0x%p + 0x%d\n", syscall_table, __NR_read);
+	//orig_read = syscall_table[__NR_read];
 }
 
 static void change_page_attr_to_rw(pte_t *pte) {
@@ -801,16 +803,17 @@ static void change_page_attr_to_ro(pte_t *pte) {
 static void replace_syscall(void *new) {
 	unsigned int level = 0;
 	pte_t *pte;
+	/*
 	pte = lookup_address((unsigned long) syscall_table, &level);
 	change_page_attr_to_rw(pte);
 	syscall_table[__NR_read] = syscall_replace_read;
-	change_page_attr_to_ro(pte);
+	change_page_attr_to_ro(pte);*/
 }
 
 static int syscall_replace_init(void) {
+	syscall_table = (void**)0xffffffff81e00280;
 	pr_info("sys_call_table address is 0x%p\n", syscall_table);
 	save_original_syscall_address();
-	pr_info("original sys_read address is 0x%p\n", orig_read);
 	replace_syscall(syscall_replace_read);
 	pr_info("system call replaced\n");
 	return 0;
