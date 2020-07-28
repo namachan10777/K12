@@ -37,8 +37,8 @@ struct JsonValue {
 };
 
 struct Pair {
-	struct JsonValue value;
 	char *key;
+	struct JsonValue value;
 };
 
 typedef enum {

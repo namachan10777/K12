@@ -587,6 +587,7 @@ int parse_path(struct Path *path_buf, char *buf, int count) {
 		list = new;
 		++len;
 	}
+	printk("path len %d\n", len);
 	elems = (struct PathElem*)kmalloc(len*sizeof(struct PathElem), GFP_KERNEL);
 	for (j=0; j<len; ++j) {
 		elems[len-j-1] = list->e;
@@ -671,18 +672,19 @@ struct JsonValue *get_out_value(struct JsonValue *json, struct PathElem *path, i
 	if (!create_elems) return NULL;
 	if (json->pairs.len+1 > json->pairs.mem_len) {
 		int i;
-		struct Pair *pairs = (struct Pair*)kmalloc(sizeof(struct Pair)*json->pairs.mem_len*2+1, GFP_KERNEL);
+		struct Pair *pairs = (struct Pair*)kmalloc(sizeof(struct Pair) * (json->pairs.mem_len*2+1), GFP_KERNEL);
 		if (pairs == NULL) return NULL;
 		for (i=0; i<json->pairs.len; ++i) {
 			pairs[i] = json->pairs.pairs[i];
 		}
-		if(json->pairs.mem_len > 0)
+		if (json->pairs.pairs != NULL)
 			kfree(json->pairs.pairs);
 		json->pairs.pairs = pairs;
+		printk("in %px", pairs);
 		json->pairs.mem_len = json->pairs.mem_len*2+1;
 	}
-
 	head_len = str_len(head);
+	printk("in %px", json->pairs.pairs);
 	key_buf = (char*)kmalloc(head_len, GFP_KERNEL);
 	for (i = 0; i<head_len; ++i) {
 		key_buf[i] = head[i];
@@ -692,7 +694,9 @@ struct JsonValue *get_out_value(struct JsonValue *json, struct PathElem *path, i
 	pair.value.pairs.pairs = NULL;
 	pair.value.pairs.len = 0;
 	pair.value.pairs.mem_len = 0;
+	printk("key used %s", pair.key);
 	json->pairs.pairs[json->pairs.len] = pair;
+	printk("key used %s", pair.key);
 	json->pairs.len++;
 	return get_out_value(&json->pairs.pairs[json->pairs.len-1].value, path+1, len-1, create_elems);
 }
@@ -780,21 +784,28 @@ struct JsonValue* eval(struct JsonValue* out, struct JsonValue *root) {
 }
 
 int exec(struct JsonValue* out, struct JsonValue *json) {
+	printk("exec");
 	struct JsonValue *type = access(json, "type");
 	if (type == NULL || type->type != STRING) return 0;
+	printk("got type %s", type->string.buf);
 	if (str_same(type->string.buf, "assign")) {
+		printk("type assign");
 		struct JsonValue *target = access(json, "target");
 		struct JsonValue *value = access(json, "value");
 		struct JsonValue *target_ptr, *json;
 		struct Path path;
 		if (value == NULL || target == NULL || target->type != STRING) return 0;
+		printk("access properties");
 		if (!parse_path(&path, target->string.buf, target->string.len))
 			return 0;
+		printk("parse_path");
 		if (path.len == 0 || path.path->is_ref || !str_same(path.path->name, "out")) return 0;
 		target_ptr = get_out_value(out, path.path+1, path.len-1, 1);
 		if (target_ptr == NULL) return 0;
+		printk("get target");
 		sweep(target_ptr);
 		json = eval(out, value);
+		printk("eval");
 		if (json == NULL) return 0;
 		*target_ptr = *json;
 		sweep(json);
@@ -860,7 +871,8 @@ static ssize_t lambda_write(struct file *file, const char __user *buf, size_t co
 		printk("syntax error");
 		return 0;
 	}
-	info->json = eval(info->json, &result->value);
+	/*info->json = eval(info->json, &result->value);*/
+	load(info->json, &result->value);
 	return count;
 }
 
@@ -884,6 +896,8 @@ static long lambda_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	}
 	else if (cmd == 1) {
 		return info->pp_mode;
+	}
+	else if (cmd == 2) {
 	}
     return 0;
 }
