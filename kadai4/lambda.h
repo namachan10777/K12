@@ -37,8 +37,8 @@ struct JsonValue {
 };
 
 struct Pair {
-	char *key;
 	struct JsonValue value;
+	char *key;
 };
 
 typedef enum {
@@ -56,7 +56,7 @@ typedef struct {
 } ParseResult;
 
 ParseResult parse(const char *input, int count);
-int stringify(char *buf, int buf_size, JSONValue json);
+int stringify(char *buf, int buf_size, JSONValue json, int pp_mode);
 
 struct JsonValue* eval(struct JsonValue *out, struct JsonValue *json);
 int exec(struct JsonValue* out, struct JsonValue *json);

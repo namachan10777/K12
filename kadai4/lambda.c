@@ -2,6 +2,8 @@
 
 #include <linux/module.h>
 #include <linux/syscalls.h>
+#include <linux/ktime.h>
+#include <linux/timekeeping.h>
 #include <linux/fs.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -261,7 +263,8 @@ ParseResult parse_impl(int count, const char *input) {
 		pairs = kmalloc(sizeof(struct Pair) * cnt, GFP_KERNEL);
 		idx = cnt;
 		while(list != NULL) {
-			pairs[--idx] = (struct Pair){ list->key, list->json };
+			pairs[--idx].key = list->key;
+			pairs[idx].value = list->json;
 			list = list->next;
 		}
 		result.type = SUCCESS;
@@ -335,7 +338,7 @@ int stringify_impl(char *buf, int indent_count, int pp_mode, int buf_size, JSONV
 	else if (json.type == INTEGER) {
 		int base = 1;
 		int abs = json.integer > 0 ? json.integer : -json.integer;
-		char tmp[1024];
+		char tmp[256];
 		int k;
 		if (i >= buf_size-1) return -1;
 		if (json.integer < 0)
@@ -435,7 +438,6 @@ int stringify_impl(char *buf, int indent_count, int pp_mode, int buf_size, JSONV
 					buf[offset++] = '\n';
 			}
 			buf[offset+1] = '\0';
-			printk("%s\n", buf);
 		}
 		if (buf_size - offset < 1) return -1;
 		for (i=0; i<indent_count; ++i) {
@@ -469,8 +471,8 @@ int stringify_impl(char *buf, int indent_count, int pp_mode, int buf_size, JSONV
 	}
 }
 
-int stringify(char *buf, int buf_size, JSONValue json) {
-	int len = stringify_impl(buf, 0, 1, buf_size-1, json);
+int stringify(char *buf, int buf_size, JSONValue json, int pp_mode) {
+	int len = stringify_impl(buf, 0, pp_mode, buf_size-1, json);
 	if (len >= 0) {
 		buf[len] = '\0';
 		return len+1;
@@ -616,27 +618,29 @@ int str_len(char* a) {
 
 struct JsonValue *get_value(struct JsonValue *json, struct PathElem *path, int len);
 
-char* resolve_path_elem(struct JsonValue *json, struct PathElem path) {
-	if (path.is_ref) {
+char* resolve_path_elem(struct JsonValue *json, struct PathElem *path) {
+	if (path->is_ref) {
 		struct JsonValue* s;
-		if (path.path.len <= 0) return NULL;
-		s = get_value(json, path.path.path, path.path.len);
+		if (path->path.len <= 0) return NULL;
+		s = get_value(json, path->path.path, path->path.len);
 		if (s == NULL || s->type != STRING) return NULL;
 		return s->string.buf;
 	}
 	else {
-		return path.name;
+		return path->name;
 	}
 }
 
 struct JsonValue *get_value_sys_time(int len) {
-	struct JsonValue *time;
-	ktime_t sys_time = ktime_get();
+	printk("time");
+	struct JsonValue *value;
+	struct timespec64 time;
+	ktime_get_ts64(&time);
 	if (len != 0) return NULL;
-	time = (struct JsonValue*)kmalloc(sizeof(struct JsonValue), GFP_KERNEL);
-	time->type = INTEGER;
-	time->integer = (int)sys_time;
-	return NULL;
+	value = (struct JsonValue*)kmalloc(sizeof(struct JsonValue), GFP_KERNEL);
+	value->type = INTEGER;
+	value->integer = (int)time.tv_sec;
+	return value;
 }
 
 struct JsonValue *access(struct JsonValue *json, char* buf) {
@@ -654,9 +658,9 @@ struct JsonValue *get_out_value(struct JsonValue *json, struct PathElem *path, i
 	int head_len;
 	char *key_buf;
 	int i;
-	struct JsonValue value;
+	struct Pair pair;
 	if (len <= 0) return json;
-	head = resolve_path_elem(json, *path);
+	head = resolve_path_elem(json, path);
 	if (head == NULL) return NULL;
 	if (json->type != OBJECT) return NULL;
 	for (i=0; i<json->pairs.len; ++i) {
@@ -677,26 +681,27 @@ struct JsonValue *get_out_value(struct JsonValue *json, struct PathElem *path, i
 		json->pairs.pairs = pairs;
 		json->pairs.mem_len = json->pairs.mem_len*2+1;
 	}
-	value.type = OBJECT;
-	value.pairs.pairs = (struct Pair*)kmalloc(sizeof(struct Pair), GFP_KERNEL);
-	value.pairs.len = 0;
-	value.pairs.mem_len = 0;
 
 	head_len = str_len(head);
 	key_buf = (char*)kmalloc(head_len, GFP_KERNEL);
 	for (i = 0; i<head_len; ++i) {
 		key_buf[i] = head[i];
 	}
-	json->pairs.pairs[json->pairs.len].key = key_buf;
-	json->pairs.pairs[json->pairs.len].value = value;
+	pair.key = key_buf;
+	pair.value.type = OBJECT;
+	pair.value.pairs.pairs = NULL;
+	pair.value.pairs.len = 0;
+	pair.value.pairs.mem_len = 0;
+	json->pairs.pairs[json->pairs.len] = pair;
 	json->pairs.len++;
 	return get_out_value(&json->pairs.pairs[json->pairs.len-1].value, path+1, len-1, create_elems);
 }
 
 struct JsonValue* get_value_sys(struct JsonValue *json, struct PathElem *path, int len) {
+	printk("sys");
 	char *head;
 	if (len <= 0) return NULL;
-	head = resolve_path_elem(json, *path);
+	head = resolve_path_elem(json, path);
 	if (head == NULL) return NULL;
 	if (str_same(head, "time"))
 		return get_value_sys_time(len-1);
@@ -704,9 +709,10 @@ struct JsonValue* get_value_sys(struct JsonValue *json, struct PathElem *path, i
 }
 
 struct JsonValue* get_value(struct JsonValue *json, struct PathElem *path, int len) {
+	printk("get_value");
 	char *head;
 	if (len <= 0) return NULL;
-	head = resolve_path_elem(json, *path);
+	head = resolve_path_elem(json, path);
 	if (head == NULL)
 	if (head == NULL) return NULL;
 	if (str_same(head, "out"))
@@ -717,7 +723,6 @@ struct JsonValue* get_value(struct JsonValue *json, struct PathElem *path, int l
 }
 
 void sweep(struct JsonValue *json) {
-	int i;
 	switch (json->type) {
 		case INTEGER:
 			return;
@@ -726,15 +731,8 @@ void sweep(struct JsonValue *json) {
 		case STRING:
 			return;
 		case OBJECT:
-			for (i=0; i<json->pairs.len; ++i) {
-				kfree(json->pairs.pairs[i].key);
-				sweep(&json->pairs.pairs[i].value);
-			}
 			return;
 		case ARRAY:
-			for (i=0; i<json->arrary.len; ++i) {
-				sweep(json->arrary.arr + i);
-			}
 			return;
 	}
 }
@@ -812,7 +810,7 @@ int set_hook(struct JsonValue* out, struct JsonValue* json) {
 int load(struct JsonValue* out, struct JsonValue *json) {
 	struct JsonValue *type = access(json, "type");
 	if (type == NULL || type->type != STRING) return 0;
-	if (str_same(type->string.buf, "probe")) {
+	/*if (str_same(type->string.buf, "probe")) {
 		struct JsonValue *hooks = access(json, "hooks");
 		int i;
 		if (type == NULL || hooks->type != ARRAY) return 0;
@@ -821,33 +819,26 @@ int load(struct JsonValue* out, struct JsonValue *json) {
 				return 0;
 		}
 		return 1;
+	}*/
+	if (str_same(type->string.buf, "oneshot")) {
+		struct JsonValue *task = access(json, "task");
+		if (type == NULL || task->type != OBJECT) return 0;
+		return exec(out, task);
 	}
 	return 0;
 }
 
 
-extern void (*read_hooks[2])(void);
-
-asmlinkage void syscall_read_begin_hook(void) {
-	/*if (read_hook != NULL) {
-		exec(out, read_hook);
-	}*/
-	printk("hooked\n");
-	return;
-}
-
-
-char srcbuf[1024];
 size_t len;
-
 struct runtime_info_t {
-	int tag;
-	struct JsonValue json;
+	int pp_mode;
+	struct JsonValue *json;
 };
 
 static int lambda_open(struct inode *inode, struct file *file) {
 	struct runtime_info_t *info = kmalloc(sizeof(struct runtime_info_t), GFP_KERNEL);
-	info->tag = 0;
+	info->pp_mode = 0;
+	info->json = empty_object();
 	printk("lambda open\n");
 	file->private_data = (void*)info;
 	return 0;
@@ -860,40 +851,40 @@ static int lambda_release(struct inode *inode, struct file *file) {
 
 static ssize_t lambda_write(struct file *file, const char __user *buf, size_t count , loff_t *f_pos) {
 	struct runtime_info_t *info = file->private_data;
-	ParseResult result;
-	printk("lambda write\n");
+	ParseResult *result = (ParseResult*)kmalloc(sizeof(ParseResult), GFP_KERNEL);;
 	if (!access_ok(buf, count)) {
 		return 0;
 	}
-	printk("parse start %s %ld\n", buf, count);
-	result = parse(buf, count);
-	if (result.type != SUCCESS) {
+	*result = parse(buf, count);
+	if (result->type != SUCCESS) {
 		printk("syntax error");
 		return 0;
 	}
-	printk("parse success %d\n", result.value.type);
-	info->json = result.value;
-	info->tag = 42;
+	info->json = eval(info->json, &result->value);
 	return count;
 }
 
 static ssize_t lambda_read(struct file *file, char __user *buf, size_t count, loff_t *f_pos) {
 	struct runtime_info_t *info = file->private_data;
-	struct JsonValue *result;
 	long long len;
 	printk("lambda read\n");
 	if (!access_ok(buf, count)) {
 		return 0;
 	}
-	result = eval(out, &info->json);
-	len = stringify(buf, count, info->json);
-	printk("stringified %lld %d %d\n", len, info->json.type, info->tag);
+	len = stringify(buf, count, *info->json, info->pp_mode);
 	if (len < 0) return 0;
 	return 0;
 }
 
 static long lambda_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
+	struct runtime_info_t *info = filp->private_data;
+	if (cmd == 0) {
+		info->pp_mode = arg;
+	}
+	else if (cmd == 1) {
+		return info->pp_mode;
+	}
     return 0;
 }
 
@@ -908,8 +899,7 @@ struct file_operations s_lambda_fops = {
 
 static int lambda_init(void) {
 	printk("Hello lambda\n");
-	printk("hooks 0x%p\n", (void*)read_hooks[0]);
-	//read_hooks[0] = syscall_read_begin_hook;
+	out = empty_object();
 	register_chrdev(DRIVER_MEJOR, DRIVER_NAME, &s_lambda_fops);
 	return 0;
 }
