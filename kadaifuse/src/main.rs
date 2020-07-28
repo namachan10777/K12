@@ -1,171 +1,104 @@
-use fuse::{
-    Filesystem,
-    ReplyEntry,
-    ReplyAttr,
-    ReplyData,
-    ReplyDirectory,
-    ReplyOpen,
-    Request,
-    FileAttr,
-};
-
-use std::collections::HashMap;
+use std::env;
 use std::ffi::OsStr;
-use time::Timespec;
-use log::info;
-const ENOENT: i32 = 44;
+use time::{Timespec, Duration};
+use libc::ENOENT;
+use fuse::{FileType, FileAttr, Filesystem, Request, ReplyData, ReplyEntry, ReplyAttr, ReplyDirectory};
 
-struct MailFs {
-    file_handle_count: u64,
-    dir_handle_count: u64,
-    file_handle_map: HashMap<u64, u64>,
-    dir_handle_map: HashMap<u64, u64>,
+const TTL: Timespec = Timespec { sec : 1, nsec: 0};
+const UNIX_EPOCH : Timespec = time::Timespec { sec: 0, nsec: 0};
 
-    box_to_ino: HashMap<String, (u64, FileAttr)>,
-    boxes: HashMap<u64, HashMap<String, u64>>,
-
-    files: HashMap<u64, (FileAttr, String)>,
-    root_ino: u64,
-}
-
-const DEFAULT_TS : Timespec = Timespec {
-    sec: 1,
-    nsec: 0,
+const HELLO_DIR_ATTR: FileAttr = FileAttr {
+    ino: 1,
+    size: 0,
+    blocks: 0,
+    atime: UNIX_EPOCH,                                  // 1970-01-01 00:00:00
+    mtime: UNIX_EPOCH,
+    ctime: UNIX_EPOCH,
+    crtime: UNIX_EPOCH,
+    kind: FileType::Directory,
+    perm: 0o755,
+    nlink: 2,
+    uid: 501,
+    gid: 20,
+    rdev: 0,
+    flags: 0,
 };
 
-impl Filesystem for MailFs {
-    fn open(&mut self, _req: &Request, ino: u64, flags: u32, reply: ReplyOpen) {
-        info!("open {}", ino);
-        if self.files.get(&ino).is_some() {
-            self.file_handle_count += 1;
-            self.file_handle_map.insert(self.file_handle_count, ino);
-            reply.opened(self.file_handle_count, flags);
-        }
-        else {
-            reply.error(ENOENT)
-        }
-    }
+const HELLO_TXT_CONTENT: &str = "Hello World!\n";
 
-    fn opendir(&mut self, _req: &Request, ino: u64, flags: u32, reply: ReplyOpen) {
-        info!("opendir {}", ino);
-        if self.files.get(&ino).is_some() {
-            self.dir_handle_count += 1;
-            self.dir_handle_map.insert(self.dir_handle_count, ino);
-            reply.opened(self.dir_handle_count, flags);
-        }
-        else {
-            reply.error(ENOENT)
-        }
-    }
+const HELLO_TXT_ATTR: FileAttr = FileAttr {
+    ino: 2,
+    size: 13,
+    blocks: 1,
+    atime: UNIX_EPOCH,                                  // 1970-01-01 00:00:00
+    mtime: UNIX_EPOCH,
+    ctime: UNIX_EPOCH,
+    crtime: UNIX_EPOCH,
+    kind: FileType::RegularFile,
+    perm: 0o644,
+    nlink: 1,
+    uid: 501,
+    gid: 20,
+    rdev: 0,
+    flags: 0,
+};
 
+struct HelloFS;
+
+impl Filesystem for HelloFS {
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        info!("lookup {:?}", name);
-        if parent == self.root_ino {
-            if let Some((_, attr)) = self.box_to_ino.get(name.to_str().unwrap()) {
-                reply.entry(&DEFAULT_TS, attr, 0);
-            }
-            else {
-                reply.error(ENOENT)
-            }
-        }
-        else if let Some(mailbox) = self.boxes.get(&parent){
-            if let Some(ino) = mailbox.get(name.to_str().unwrap()) {
-                if let Some((attr, _)) = self.files.get(ino) {
-                    reply.entry(&DEFAULT_TS, attr, 0);
-                }
-            }
-        }
-        else {
-            reply.error(ENOENT)
+        if parent == 1 && name.to_str() == Some("hello.txt") {
+            reply.entry(&TTL, &HELLO_TXT_ATTR, 0);
+        } else {
+            reply.error(ENOENT);
         }
     }
 
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        if let Some((attr, _)) = self.files.get(&ino) {
-            info!("getattr {:?}", attr);
-            reply.attr(&DEFAULT_TS, attr);
-        }
-        else {
-            reply.error(ENOENT)
+        match ino {
+            1 => reply.attr(&TTL, &HELLO_DIR_ATTR),
+            2 => reply.attr(&TTL, &HELLO_TXT_ATTR),
+            _ => reply.error(ENOENT),
         }
     }
 
-    fn read(&mut self, _req: &Request, ino: u64, _fh: u64, offset: i64, size: u32, reply: ReplyData) {
-        info!("read {}", ino);
-        if let Some((_, data)) = self.files.get(&ino) {
-            if (data.len() as i64) < (size as i64 - offset) {
-                reply.data(&data.as_bytes()[(offset as usize)..])
-            }
-            else {
-                reply.data(&data.as_bytes()[(offset as usize)..(offset as usize)+(size as usize)])
-            }
-        }
-        else {
-            reply.error(ENOENT)
+    fn read(&mut self, _req: &Request, ino: u64, _fh: u64, offset: i64, _size: u32, reply: ReplyData) {
+        if ino == 2 {
+            reply.data(&HELLO_TXT_CONTENT.as_bytes()[offset as usize..]);
+        } else {
+            reply.error(ENOENT);
         }
     }
 
     fn readdir(&mut self, _req: &Request, ino: u64, _fh: u64, offset: i64, mut reply: ReplyDirectory) {
-        reply.add(1, 1, fuse::FileType::Directory, ".");
-        reply.add(1, 2, fuse::FileType::Directory, "..");
-        if ino == self.root_ino {
-            for (i, (box_name, (box_ino, _))) in self.box_to_ino.iter().enumerate().skip(offset as usize) {
-                reply.add(*box_ino, (i as i64) + 3, fuse::FileType::Directory, box_name);
-            }
-            reply.ok()
+        if ino != 1 {
+            reply.error(ENOENT);
+            return;
         }
-        else {
-            if let Some(dir) = self.boxes.get(&ino) {
-                for (box_name, box_ino) in dir {
-                    reply.add(*box_ino, 0, fuse::FileType::RegularFile, box_name);
-                }
-                reply.ok()
-            }
-            else {
-                reply.error(ENOENT);
-            }
+
+        let entries = vec![
+            (1, FileType::Directory, "."),
+            (1, FileType::Directory, ".."),
+            (2, FileType::RegularFile, "hello.txt"),
+        ];
+
+        for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
+            // i + 1 means the index of the next entry
+            reply.add(entry.0, (i + 1) as i64, entry.1, entry.2);
         }
+        reply.ok();
     }
 }
 
 fn main() {
-    let root_attr = fuse::FileAttr {
-        ino: 1,
-        size: 0,
-        blocks: 0,
-        atime: Timespec::new(0, 0),
-        mtime: Timespec::new(0, 0),
-        ctime: Timespec::new(0, 0),
-        crtime: Timespec::new(0, 0),
-        kind: fuse::FileType::Directory,
-        perm: 0o755,
-        nlink: 2,
-        uid: 501,
-        gid: 20,
-        rdev: 0,
-        flags: 0,
-    };
     env_logger::init();
     let matches = clap::App::new("mailfs")
         .arg(clap::Arg::with_name("MOUNTPOINT").required(true).index(1))
         .get_matches();
-    let options = ["-o", "ro", "-o", "fsname=mailfs"]
+    let mountpoint = matches.value_of("MOUNTPOINT").unwrap();
+    let options = ["-o", "ro", "-o", "fsname=hello"]
         .iter()
         .map(|o| o.as_ref())
         .collect::<Vec<&OsStr>>();
-    let mut files = HashMap::new();
-    files.insert(1, (root_attr, String::new()));
-    let boxes = HashMap::new();
-    let box_to_ino = HashMap::new();
-    let fs = MailFs {
-        file_handle_count: 0,
-        file_handle_map: HashMap::new(),
-        dir_handle_count: 0,
-        dir_handle_map: HashMap::new(),
-        box_to_ino,
-        boxes,
-        files,
-        root_ino: 1,
-    };
-    fuse::mount(fs, &matches.value_of("MOUNTPOINT").unwrap(), &options).unwrap();
+    fuse::mount(HelloFS, &mountpoint, &options).unwrap();
 }

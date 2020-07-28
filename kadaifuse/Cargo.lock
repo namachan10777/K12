@@ -256,6 +256,7 @@ dependencies = [
  "env_logger",
  "fuse",
  "imap",
+ "libc",
  "log 0.4.11",
  "mailparse",
  "native-tls",
