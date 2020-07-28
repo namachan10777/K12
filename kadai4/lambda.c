@@ -587,7 +587,6 @@ int parse_path(struct Path *path_buf, char *buf, int count) {
 		list = new;
 		++len;
 	}
-	printk("path len %d\n", len);
 	elems = (struct PathElem*)kmalloc(len*sizeof(struct PathElem), GFP_KERNEL);
 	for (j=0; j<len; ++j) {
 		elems[len-j-1] = list->e;
@@ -633,7 +632,6 @@ char* resolve_path_elem(struct JsonValue *json, struct PathElem *path) {
 }
 
 struct JsonValue *get_value_sys_time(int len) {
-	printk("time");
 	struct JsonValue *value;
 	struct timespec64 time;
 	ktime_get_ts64(&time);
@@ -680,11 +678,9 @@ struct JsonValue *get_out_value(struct JsonValue *json, struct PathElem *path, i
 		if (json->pairs.pairs != NULL)
 			kfree(json->pairs.pairs);
 		json->pairs.pairs = pairs;
-		printk("in %px", pairs);
 		json->pairs.mem_len = json->pairs.mem_len*2+1;
 	}
 	head_len = str_len(head);
-	printk("in %px", json->pairs.pairs);
 	key_buf = (char*)kmalloc(head_len, GFP_KERNEL);
 	for (i = 0; i<head_len; ++i) {
 		key_buf[i] = head[i];
@@ -694,15 +690,12 @@ struct JsonValue *get_out_value(struct JsonValue *json, struct PathElem *path, i
 	pair.value.pairs.pairs = NULL;
 	pair.value.pairs.len = 0;
 	pair.value.pairs.mem_len = 0;
-	printk("key used %s", pair.key);
 	json->pairs.pairs[json->pairs.len] = pair;
-	printk("key used %s", pair.key);
 	json->pairs.len++;
 	return get_out_value(&json->pairs.pairs[json->pairs.len-1].value, path+1, len-1, create_elems);
 }
 
 struct JsonValue* get_value_sys(struct JsonValue *json, struct PathElem *path, int len) {
-	printk("sys");
 	char *head;
 	if (len <= 0) return NULL;
 	head = resolve_path_elem(json, path);
@@ -713,7 +706,6 @@ struct JsonValue* get_value_sys(struct JsonValue *json, struct PathElem *path, i
 }
 
 struct JsonValue* get_value(struct JsonValue *json, struct PathElem *path, int len) {
-	printk("get_value");
 	char *head;
 	if (len <= 0) return NULL;
 	head = resolve_path_elem(json, path);
@@ -784,28 +776,21 @@ struct JsonValue* eval(struct JsonValue* out, struct JsonValue *root) {
 }
 
 int exec(struct JsonValue* out, struct JsonValue *json) {
-	printk("exec");
 	struct JsonValue *type = access(json, "type");
 	if (type == NULL || type->type != STRING) return 0;
-	printk("got type %s", type->string.buf);
 	if (str_same(type->string.buf, "assign")) {
-		printk("type assign");
 		struct JsonValue *target = access(json, "target");
 		struct JsonValue *value = access(json, "value");
 		struct JsonValue *target_ptr, *json;
 		struct Path path;
 		if (value == NULL || target == NULL || target->type != STRING) return 0;
-		printk("access properties");
 		if (!parse_path(&path, target->string.buf, target->string.len))
 			return 0;
-		printk("parse_path");
 		if (path.len == 0 || path.path->is_ref || !str_same(path.path->name, "out")) return 0;
 		target_ptr = get_out_value(out, path.path+1, path.len-1, 1);
 		if (target_ptr == NULL) return 0;
-		printk("get target");
 		sweep(target_ptr);
 		json = eval(out, value);
-		printk("eval");
 		if (json == NULL) return 0;
 		*target_ptr = *json;
 		sweep(json);
@@ -850,13 +835,11 @@ static int lambda_open(struct inode *inode, struct file *file) {
 	struct runtime_info_t *info = kmalloc(sizeof(struct runtime_info_t), GFP_KERNEL);
 	info->pp_mode = 0;
 	info->json = empty_object();
-	printk("lambda open\n");
 	file->private_data = (void*)info;
 	return 0;
 }
 
 static int lambda_release(struct inode *inode, struct file *file) {
-	printk("lambda close\n");
 	return 0;
 }
 
@@ -868,7 +851,6 @@ static ssize_t lambda_write(struct file *file, const char __user *buf, size_t co
 	}
 	*result = parse(buf, count);
 	if (result->type != SUCCESS) {
-		printk("syntax error");
 		return 0;
 	}
 	/*info->json = eval(info->json, &result->value);*/
@@ -879,7 +861,6 @@ static ssize_t lambda_write(struct file *file, const char __user *buf, size_t co
 static ssize_t lambda_read(struct file *file, char __user *buf, size_t count, loff_t *f_pos) {
 	struct runtime_info_t *info = file->private_data;
 	long long len;
-	printk("lambda read\n");
 	if (!access_ok(buf, count)) {
 		return 0;
 	}
@@ -898,6 +879,8 @@ static long lambda_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		return info->pp_mode;
 	}
 	else if (cmd == 2) {
+		// GC
+		info->json = empty_object();
 	}
     return 0;
 }
