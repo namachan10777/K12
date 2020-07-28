@@ -1,0 +1,21 @@
+[package]
+name = "kadaifuse"
+version = "0.1.0"
+authors = ["Nakano Masaki <namachan10777@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+fuse = "0.3.1"
+imap = "2.2.0"
+native-tls = "0.2.4"
+mailparse = "0.12.1"
+serde = "1.0.111"
+serde_json = "1.0.53"
+serde_derive = "1.0.111"
+clap = "2.33.1"
+rpassword = "4.0.5"
+time = "0.1.38"
+env_logger = "0.7.1"
+log = "0.4.11"
