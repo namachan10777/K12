@@ -1,104 +1,332 @@
-use std::env;
-use std::ffi::OsStr;
-use time::{Timespec, Duration};
-use libc::ENOENT;
-use fuse::{FileType, FileAttr, Filesystem, Request, ReplyData, ReplyEntry, ReplyAttr, ReplyDirectory};
+use std::ffi::{OsStr, OsString};
+use std::time::{Duration, SystemTime};
 
-const TTL: Timespec = Timespec { sec : 1, nsec: 0};
-const UNIX_EPOCH : Timespec = time::Timespec { sec: 0, nsec: 0};
+use futures_util::stream;
 
-const HELLO_DIR_ATTR: FileAttr = FileAttr {
-    ino: 1,
-    size: 0,
-    blocks: 0,
-    atime: UNIX_EPOCH,                                  // 1970-01-01 00:00:00
-    mtime: UNIX_EPOCH,
-    ctime: UNIX_EPOCH,
-    crtime: UNIX_EPOCH,
-    kind: FileType::Directory,
-    perm: 0o755,
-    nlink: 2,
-    uid: 501,
-    gid: 20,
-    rdev: 0,
-    flags: 0,
-};
+use async_trait::async_trait;
+use fuse3::prelude::*;
+use fuse3::Session;
 
-const HELLO_TXT_CONTENT: &str = "Hello World!\n";
+use clap::{App, Arg};
 
-const HELLO_TXT_ATTR: FileAttr = FileAttr {
-    ino: 2,
-    size: 13,
+const CONTENT: &str = "hello world\n";
+
+const PARENT_INODE: u64 = 1;
+const FILE_INODE: u64 = 2;
+const FILE_NAME: &str = "hello-world.txt";
+const PARENT_MODE: u16 = 0o755;
+const FILE_MODE: u16 = 0o644;
+const TTL: Duration = Duration::from_secs(1);
+const STATFS: ReplyStatFs = ReplyStatFs {
     blocks: 1,
-    atime: UNIX_EPOCH,                                  // 1970-01-01 00:00:00
-    mtime: UNIX_EPOCH,
-    ctime: UNIX_EPOCH,
-    crtime: UNIX_EPOCH,
-    kind: FileType::RegularFile,
-    perm: 0o644,
-    nlink: 1,
-    uid: 501,
-    gid: 20,
-    rdev: 0,
-    flags: 0,
+    bfree: 0,
+    bavail: 0,
+    files: 1,
+    ffree: 0,
+    bsize: 4096,
+    namelen: u32::max_value(),
+    frsize: 0,
 };
 
-struct HelloFS;
+struct HelloWorld;
 
-impl Filesystem for HelloFS {
-    fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        if parent == 1 && name.to_str() == Some("hello.txt") {
-            reply.entry(&TTL, &HELLO_TXT_ATTR, 0);
+#[async_trait]
+impl Filesystem for HelloWorld {
+    async fn init(&self, _req: Request) -> Result<()> {
+        Ok(())
+    }
+
+    async fn destroy(&self, _req: Request) {}
+
+    async fn lookup(&self, _req: Request, parent: u64, name: &OsStr) -> Result<ReplyEntry> {
+        if parent != PARENT_INODE {
+            return Err(libc::ENOENT.into());
+        }
+
+        if name != OsStr::new(FILE_NAME) {
+            return Err(libc::ENOENT.into());
+        }
+
+        Ok(ReplyEntry {
+            ttl: TTL,
+            attr: FileAttr {
+                ino: FILE_INODE,
+                generation: 0,
+                size: CONTENT.len() as u64,
+                blocks: 0,
+                atime: SystemTime::now(),
+                mtime: SystemTime::now(),
+                ctime: SystemTime::now(),
+                kind: FileType::RegularFile,
+                perm: FILE_MODE,
+                nlink: 0,
+                uid: 0,
+                gid: 0,
+                rdev: 0,
+                blksize: 0,
+            },
+            generation: 0,
+        })
+    }
+
+    async fn getattr(
+        &self,
+        _req: Request,
+        inode: u64,
+        _fh: Option<u64>,
+        _flags: u32,
+    ) -> Result<ReplyAttr> {
+        if inode == PARENT_INODE {
+            Ok(ReplyAttr {
+                ttl: TTL,
+                attr: FileAttr {
+                    ino: PARENT_INODE,
+                    generation: 0,
+                    size: 0,
+                    blocks: 0,
+                    atime: SystemTime::now(),
+                    mtime: SystemTime::now(),
+                    ctime: SystemTime::now(),
+                    kind: FileType::Directory,
+                    perm: PARENT_MODE,
+                    nlink: 0,
+                    uid: 0,
+                    gid: 0,
+                    rdev: 0,
+                    blksize: 0,
+                },
+            })
+        } else if inode == FILE_INODE {
+            Ok(ReplyAttr {
+                ttl: TTL,
+                attr: FileAttr {
+                    ino: FILE_INODE,
+                    generation: 0,
+                    size: CONTENT.len() as _,
+                    blocks: 0,
+                    atime: SystemTime::now(),
+                    mtime: SystemTime::now(),
+                    ctime: SystemTime::now(),
+                    kind: FileType::RegularFile,
+                    perm: FILE_MODE,
+                    nlink: 0,
+                    uid: 0,
+                    gid: 0,
+                    rdev: 0,
+                    blksize: 0,
+                },
+            })
         } else {
-            reply.error(ENOENT);
+            Err(libc::ENOENT.into())
         }
     }
 
-    fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        match ino {
-            1 => reply.attr(&TTL, &HELLO_DIR_ATTR),
-            2 => reply.attr(&TTL, &HELLO_TXT_ATTR),
-            _ => reply.error(ENOENT),
+    async fn open(&self, _req: Request, inode: u64, flags: u32) -> Result<ReplyOpen> {
+        if inode != PARENT_INODE && inode != FILE_INODE {
+            return Err(libc::ENOENT.into());
         }
+
+        Ok(ReplyOpen { fh: 0, flags })
     }
 
-    fn read(&mut self, _req: &Request, ino: u64, _fh: u64, offset: i64, _size: u32, reply: ReplyData) {
-        if ino == 2 {
-            reply.data(&HELLO_TXT_CONTENT.as_bytes()[offset as usize..]);
+    async fn read(
+        &self,
+        _req: Request,
+        inode: u64,
+        _fh: u64,
+        offset: u64,
+        size: u32,
+    ) -> Result<ReplyData> {
+        if inode != FILE_INODE {
+            return Err(libc::ENOENT.into());
+        }
+
+        if offset as usize >= CONTENT.len() {
+            Ok(ReplyData {
+                data: Box::new(b""),
+            })
         } else {
-            reply.error(ENOENT);
+            let mut data = &CONTENT.as_bytes()[offset as usize..];
+
+            if data.len() > size as usize {
+                data = &data[..size as usize];
+            }
+
+            Ok(ReplyData {
+                data: Box::new(data),
+            })
         }
     }
 
-    fn readdir(&mut self, _req: &Request, ino: u64, _fh: u64, offset: i64, mut reply: ReplyDirectory) {
-        if ino != 1 {
-            reply.error(ENOENT);
-            return;
+    async fn readdir(
+        &self,
+        _req: Request,
+        inode: u64,
+        _fh: u64,
+        offset: i64,
+    ) -> Result<ReplyDirectory> {
+        if inode == FILE_INODE {
+            return Err(libc::ENOTDIR.into());
+        }
+
+        if inode != PARENT_INODE {
+            return Err(libc::ENOENT.into());
         }
 
         let entries = vec![
-            (1, FileType::Directory, "."),
-            (1, FileType::Directory, ".."),
-            (2, FileType::RegularFile, "hello.txt"),
+            DirectoryEntry {
+                inode: PARENT_INODE,
+                index: 1,
+                kind: FileType::Directory,
+                name: OsString::from("."),
+            },
+            DirectoryEntry {
+                inode: PARENT_INODE,
+                index: 2,
+                kind: FileType::Directory,
+                name: OsString::from(".."),
+            },
+            DirectoryEntry {
+                inode: FILE_INODE,
+                index: 3,
+                kind: FileType::RegularFile,
+                name: OsString::from(FILE_NAME),
+            },
         ];
 
-        for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
-            // i + 1 means the index of the next entry
-            reply.add(entry.0, (i + 1) as i64, entry.1, entry.2);
+        Ok(ReplyDirectory {
+            entries: Box::pin(stream::iter(entries.into_iter().skip(offset as usize))),
+        })
+    }
+
+    async fn access(&self, _req: Request, inode: u64, _mask: u32) -> Result<()> {
+        if inode != PARENT_INODE && inode != FILE_INODE {
+            return Err(libc::ENOENT.into());
         }
-        reply.ok();
+
+        Ok(())
+    }
+
+    async fn readdirplus(
+        &self,
+        _req: Request,
+        parent: u64,
+        _fh: u64,
+        offset: u64,
+        _lock_owner: u64,
+    ) -> Result<ReplyDirectoryPlus> {
+        if parent == FILE_INODE {
+            return Err(libc::ENOTDIR.into());
+        }
+
+        if parent != PARENT_INODE {
+            return Err(libc::ENOENT.into());
+        }
+
+        let entries = vec![
+            DirectoryEntryPlus {
+                inode: PARENT_INODE,
+                generation: 0,
+                index: 1,
+                kind: FileType::Directory,
+                name: OsString::from("."),
+                attr: FileAttr {
+                    ino: PARENT_INODE,
+                    generation: 0,
+                    size: 0,
+                    blocks: 0,
+                    atime: SystemTime::now(),
+                    mtime: SystemTime::now(),
+                    ctime: SystemTime::now(),
+                    kind: FileType::Directory,
+                    perm: PARENT_MODE,
+                    nlink: 0,
+                    uid: 0,
+                    gid: 0,
+                    rdev: 0,
+                    blksize: 0,
+                },
+                entry_ttl: TTL,
+                attr_ttl: TTL,
+            },
+            DirectoryEntryPlus {
+                inode: PARENT_INODE,
+                generation: 0,
+                index: 2,
+                kind: FileType::Directory,
+                name: OsString::from(".."),
+                attr: FileAttr {
+                    ino: PARENT_INODE,
+                    generation: 0,
+                    size: 0,
+                    blocks: 0,
+                    atime: SystemTime::now(),
+                    mtime: SystemTime::now(),
+                    ctime: SystemTime::now(),
+                    kind: FileType::Directory,
+                    perm: PARENT_MODE,
+                    nlink: 0,
+                    uid: 0,
+                    gid: 0,
+                    rdev: 0,
+                    blksize: 0,
+                },
+                entry_ttl: TTL,
+                attr_ttl: TTL,
+            },
+            DirectoryEntryPlus {
+                inode: FILE_INODE,
+                generation: 0,
+                index: 3,
+                kind: FileType::Directory,
+                name: OsString::from(FILE_NAME),
+                attr: FileAttr {
+                    ino: FILE_INODE,
+                    generation: 0,
+                    size: CONTENT.len() as _,
+                    blocks: 0,
+                    atime: SystemTime::now(),
+                    mtime: SystemTime::now(),
+                    ctime: SystemTime::now(),
+                    kind: FileType::RegularFile,
+                    perm: FILE_MODE,
+                    nlink: 0,
+                    uid: 0,
+                    gid: 0,
+                    rdev: 0,
+                    blksize: 0,
+                },
+                entry_ttl: TTL,
+                attr_ttl: TTL,
+            },
+        ];
+
+        Ok(ReplyDirectoryPlus {
+            entries: Box::pin(stream::iter(entries.into_iter().skip(offset as usize))),
+        })
+    }
+
+    async fn statsfs(&self, _req: Request, _inode: u64) -> Result<ReplyStatFs> {
+        Ok(STATFS)
     }
 }
 
-fn main() {
+#[async_std::main]
+async fn main() {
     env_logger::init();
-    let matches = clap::App::new("mailfs")
-        .arg(clap::Arg::with_name("MOUNTPOINT").required(true).index(1))
+    let matches = App::new("mailfs")
+        .arg(Arg::with_name("MOUNTPOINT")
+              .index(1)
+              .required(true))
         .get_matches();
-    let mountpoint = matches.value_of("MOUNTPOINT").unwrap();
-    let options = ["-o", "ro", "-o", "fsname=hello"]
-        .iter()
-        .map(|o| o.as_ref())
-        .collect::<Vec<&OsStr>>();
-    fuse::mount(HelloFS, &mountpoint, &options).unwrap();
+
+    let uid = unsafe { libc::getuid() };
+    let gid = unsafe { libc::getgid() };
+
+    let mount_options = MountOptions::default().uid(uid).gid(gid).read_only(true);
+
+    Session::new(mount_options)
+        .mount_with_unprivileged(HelloWorld {}, matches.value_of("MOUNTPOINT").unwrap())
+        .await
+        .unwrap()
 }
