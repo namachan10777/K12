@@ -5,8 +5,12 @@ use std::time::{Duration, SystemTime};
 use futures_util::stream;
 
 use async_trait::async_trait;
-use fuse3::prelude::*;
-use fuse3::Session;
+use fuse3::reply::{
+    DirectoryEntry, DirectoryEntryPlus, ReplyAttr, ReplyData, ReplyDirectory, ReplyDirectoryPlus,
+    ReplyEntry, ReplyOpen, ReplyStatFs,
+};
+
+use fuse3::{FileAttr, FileType, Filesystem, MountOptions, Request, Session};
 
 use clap::{App, Arg};
 
@@ -79,13 +83,13 @@ fn gen_mail_attr(cfg: &AttrConfig, ino: u64, size: u64) -> FileAttr {
 
 #[async_trait]
 impl Filesystem for HelloWorld {
-    async fn init(&self, _req: Request) -> Result<()> {
+    async fn init(&self, _req: Request) -> fuse3::Result<()> {
         Ok(())
     }
 
     async fn destroy(&self, _req: Request) {}
 
-    async fn lookup(&self, _req: Request, parent: u64, name: &OsStr) -> Result<ReplyEntry> {
+    async fn lookup(&self, _req: Request, parent: u64, name: &OsStr) -> fuse3::Result<ReplyEntry> {
         self.parent_to_entries
             .get(&parent)
             .map(|entries| name.to_str().map(|fname| entries.get(fname)))
@@ -107,7 +111,7 @@ impl Filesystem for HelloWorld {
         inode: u64,
         _fh: Option<u64>,
         _flags: u32,
-    ) -> Result<ReplyAttr> {
+    ) -> fuse3::Result<ReplyAttr> {
         self.ino_to_attr
             .get(&inode)
             .map(|attr| ReplyAttr {
@@ -117,7 +121,7 @@ impl Filesystem for HelloWorld {
             .ok_or_else(|| libc::ENOENT.into())
     }
 
-    async fn open(&self, _req: Request, inode: u64, flags: u32) -> Result<ReplyOpen> {
+    async fn open(&self, _req: Request, inode: u64, flags: u32) -> fuse3::Result<ReplyOpen> {
         if self.ino_to_attr.get(&inode).is_some() {
             Ok(ReplyOpen { fh: 0, flags })
         } else {
@@ -132,7 +136,7 @@ impl Filesystem for HelloWorld {
         _fh: u64,
         offset: u64,
         size: u32,
-    ) -> Result<ReplyData> {
+    ) -> fuse3::Result<ReplyData> {
         self.ino_to_text
             .get(&inode)
             .map(|text| {
@@ -158,7 +162,7 @@ impl Filesystem for HelloWorld {
         inode: u64,
         _fh: u64,
         offset: i64,
-    ) -> Result<ReplyDirectory> {
+    ) -> fuse3::Result<ReplyDirectory> {
         let mut basic = vec![
             DirectoryEntry {
                 inode,
@@ -173,33 +177,29 @@ impl Filesystem for HelloWorld {
                 name: OsString::from(".."),
             },
         ];
-        let entries = 
-        self.parent_to_entries
-            .get(&inode)
-            .map(|entries| {
-                entries
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, (name, ino))| DirectoryEntry {
-                        inode: *ino,
-                        index: idx as u64 + 3,
-                        kind: FileType::Directory,
-                        name: OsString::from(name),
-                    })
-                    .collect::<Vec<DirectoryEntry>>()
-            });
+        let entries = self.parent_to_entries.get(&inode).map(|entries| {
+            entries
+                .iter()
+                .enumerate()
+                .map(|(idx, (name, ino))| DirectoryEntry {
+                    inode: *ino,
+                    index: idx as u64 + 3,
+                    kind: FileType::Directory,
+                    name: OsString::from(name),
+                })
+                .collect::<Vec<DirectoryEntry>>()
+        });
         if let Some(mut entries) = entries {
             basic.append(&mut entries);
             Ok(ReplyDirectory {
-                entries: Box::pin(stream::iter(entries.into_iter().skip(offset as usize)))
+                entries: Box::pin(stream::iter(entries.into_iter().skip(offset as usize))),
             })
-        }
-        else {
+        } else {
             Err(libc::ENOENT.into())
         }
     }
 
-    async fn access(&self, _req: Request, inode: u64, _mask: u32) -> Result<()> {
+    async fn access(&self, _req: Request, inode: u64, _mask: u32) -> fuse3::Result<()> {
         if self.ino_to_attr.get(&inode).is_some() {
             Ok(())
         } else {
@@ -215,7 +215,7 @@ impl Filesystem for HelloWorld {
         _fh: u64,
         offset: u64,
         _lock_owner: u64,
-    ) -> Result<ReplyDirectoryPlus> {
+    ) -> fuse3::Result<ReplyDirectoryPlus> {
         let mut basic = vec![
             DirectoryEntryPlus {
                 inode,
@@ -238,37 +238,33 @@ impl Filesystem for HelloWorld {
                 name: OsString::from(".."),
             },
         ];
-        let entries = 
-        self.parent_to_entries
-            .get(&inode)
-            .map(|entries| {
-                entries
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, (name, ino))| DirectoryEntryPlus {
-                        inode: *ino,
-                        index: idx as u64 + 3,
-                        kind: FileType::Directory,
-                        name: OsString::from(name),
-                        generation: 0,
-                        attr: *self.ino_to_attr.get(ino).unwrap(),
-                        attr_ttl: TTL,
-                        entry_ttl: TTL,
-                    })
-                    .collect::<Vec<DirectoryEntryPlus>>()
-            });
+        let entries = self.parent_to_entries.get(&inode).map(|entries| {
+            entries
+                .iter()
+                .enumerate()
+                .map(|(idx, (name, ino))| DirectoryEntryPlus {
+                    inode: *ino,
+                    index: idx as u64 + 3,
+                    kind: FileType::Directory,
+                    name: OsString::from(name),
+                    generation: 0,
+                    attr: *self.ino_to_attr.get(ino).unwrap(),
+                    attr_ttl: TTL,
+                    entry_ttl: TTL,
+                })
+                .collect::<Vec<DirectoryEntryPlus>>()
+        });
         if let Some(mut entries) = entries {
             basic.append(&mut entries);
             Ok(ReplyDirectoryPlus {
-                entries: Box::pin(stream::iter(entries.into_iter().skip(offset as usize)))
+                entries: Box::pin(stream::iter(entries.into_iter().skip(offset as usize))),
             })
-        }
-        else {
+        } else {
             Err(libc::ENOENT.into())
         }
     }
 
-    async fn statsfs(&self, _req: Request, _inode: u64) -> Result<ReplyStatFs> {
+    async fn statsfs(&self, _req: Request, _inode: u64) -> fuse3::Result<ReplyStatFs> {
         Ok(STATFS)
     }
 }
@@ -278,6 +274,24 @@ async fn main() {
     env_logger::init();
     let matches = App::new("mailfs")
         .arg(Arg::with_name("MOUNTPOINT").index(1).required(true))
+        .arg(
+            Arg::with_name("DOMAIN")
+                .required(true)
+                .short("d")
+                .long("domain"),
+        )
+        .arg(
+            Arg::with_name("USERNAME")
+                .required(true)
+                .short("n")
+                .long("username"),
+        )
+        .arg(
+            Arg::with_name("PASSWORD")
+                .required(true)
+                .short("p")
+                .long("password"),
+        )
         .get_matches();
 
     let uid = unsafe { libc::getuid() };

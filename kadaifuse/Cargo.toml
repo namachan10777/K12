@@ -18,3 +18,5 @@ mio = { version = "0.7.0", features = ["os-poll", "os-util"] }
 tempfile = "3.1.0"
 clap = "2.33.1"
 env_logger = "0.7.1"
+imap = "2.2.0"
+native-tls = "0.2.4"
