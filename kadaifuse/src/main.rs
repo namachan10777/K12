@@ -1,4 +1,3 @@
-use log::{info, warn};
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::time::{Duration, SystemTime};
@@ -10,8 +9,7 @@ use std::io;
 
 use async_trait::async_trait;
 use fuse3::reply::{
-    DirectoryEntry, DirectoryEntryPlus, ReplyAttr, ReplyData, ReplyDirectory, ReplyDirectoryPlus,
-    ReplyEntry, ReplyOpen, ReplyStatFs,
+    DirectoryEntryPlus, ReplyAttr, ReplyData, ReplyDirectoryPlus, ReplyEntry, ReplyOpen,
 };
 
 use fuse3::{FileAttr, FileType, Filesystem, MountOptions, Request, Session};
@@ -19,14 +17,14 @@ use fuse3::{FileAttr, FileType, Filesystem, MountOptions, Request, Session};
 use clap::{App, Arg};
 
 #[derive(Debug, PartialEq)]
-enum UTF_7Error {
+enum ModifiedUTF7DecodeError {
     InvalidEncoding,
     InvalidBase64(base64::DecodeError),
     CannotReadAsU16,
     InvalidUTF16,
 }
 
-fn decode_utf7(src: &str) -> Result<String, UTF_7Error> {
+fn decode_modified_utf7(src: &str) -> Result<String, ModifiedUTF7DecodeError> {
     let mut buf = String::new();
     let mut i = 0;
     while i < src.len() {
@@ -35,36 +33,37 @@ fn decode_utf7(src: &str) -> Result<String, UTF_7Error> {
                 if *base64_end == i + 1 {
                     buf.push('&');
                 } else {
-                    let decoded_src = base64::decode(src[i + 1..i+*base64_end+1].replace(',', "/").as_bytes())
-                        .map_err(|e| UTF_7Error::InvalidBase64(e))?;
+                    let decoded_src = base64::decode(
+                        src[i + 1..i + *base64_end + 1].replace(',', "/").as_bytes(),
+                    )
+                    .map_err(ModifiedUTF7DecodeError::InvalidBase64)?;
                     let len = decoded_src.len();
                     let mut decoded = io::Cursor::new(decoded_src);
                     let mut u16_arr = Vec::new();
                     let mut cnt = 0;
                     if len % 2 == 1 {
-                        return Err(UTF_7Error::CannotReadAsU16);
+                        return Err(ModifiedUTF7DecodeError::CannotReadAsU16);
                     }
                     while cnt < len {
                         cnt += 2;
                         u16_arr.push(
                             decoded
                                 .read_u16::<BE>()
-                                .map_err(|_| UTF_7Error::CannotReadAsU16)?,
+                                .map_err(|_| ModifiedUTF7DecodeError::CannotReadAsU16)?,
                         );
                     }
                     buf.push_str(
                         &char::decode_utf16(u16_arr)
-                            .map(|c| c.map_err(|_| UTF_7Error::InvalidUTF16))
-                            .collect::<Result<String, UTF_7Error>>()?,
+                            .map(|c| c.map_err(|_| ModifiedUTF7DecodeError::InvalidUTF16))
+                            .collect::<Result<String, ModifiedUTF7DecodeError>>()?,
                     );
-                    i += base64_end+2;
+                    i += base64_end + 2;
                 }
             } else {
-                return Err(UTF_7Error::InvalidEncoding);
+                return Err(ModifiedUTF7DecodeError::InvalidEncoding);
             }
-        }
-        else {
-            buf.push_str(&src[i..i+1]);
+        } else {
+            buf.push_str(&src[i..i + 1]);
             i += 1;
         }
     }
@@ -76,8 +75,14 @@ mod test {
     use super::*;
     #[test]
     fn test_utf7() {
-        assert_eq!(Ok("削除済みアイテム".to_owned()), decode_utf7("&UkqWZG4IMH8wojCkMMYw4A-"));
-        assert_eq!(Ok("Tohbmoho-/日本の休日".to_owned()), decode_utf7("Tohbmoho-/&ZeVnLDBuTxFl5Q-"));
+        assert_eq!(
+            Ok("削除済みアイテム".to_owned()),
+            decode_modified_utf7("&UkqWZG4IMH8wojCkMMYw4A-")
+        );
+        assert_eq!(
+            Ok("Tohbmoho-/日本の休日".to_owned()),
+            decode_modified_utf7("Tohbmoho-/&ZeVnLDBuTxFl5Q-")
+        );
     }
 }
 
@@ -86,16 +91,6 @@ const CONTENT: &str = "hello world\n";
 const ROOT_INODE: u64 = 1;
 const FILE_MODE: u16 = 0o444;
 const TTL: Duration = Duration::from_secs(1);
-const STATFS: ReplyStatFs = ReplyStatFs {
-    blocks: 1,
-    bfree: 0,
-    bavail: 0,
-    files: 1,
-    ffree: 0,
-    bsize: 4096,
-    namelen: u32::max_value(),
-    frsize: 0,
-};
 
 struct HelloWorld {
     ino_to_attr: HashMap<u64, FileAttr>,
@@ -244,18 +239,17 @@ impl Filesystem for HelloWorld {
             entries
                 .iter()
                 .enumerate()
-                .map(|(idx, (name, ino))| {
-                    DirectoryEntryPlus {
-                        inode: *ino,
-                        index: idx as u64 + 3,
-                        kind: FileType::Directory,
-                        name: OsString::from(name),
-                        generation: 0,
-                        attr: *self.ino_to_attr.get(ino).unwrap(),
-                        attr_ttl: TTL,
-                        entry_ttl: TTL,
-                    }
-                }).collect::<Vec<DirectoryEntryPlus>>()
+                .map(|(idx, (name, ino))| DirectoryEntryPlus {
+                    inode: *ino,
+                    index: idx as u64 + 3,
+                    kind: FileType::Directory,
+                    name: OsString::from(name),
+                    generation: 0,
+                    attr: *self.ino_to_attr.get(ino).unwrap(),
+                    attr_ttl: TTL,
+                    entry_ttl: TTL,
+                })
+                .collect::<Vec<DirectoryEntryPlus>>()
         });
         if let Some(entries) = entries {
             Ok(ReplyDirectoryPlus {
@@ -325,23 +319,27 @@ async fn main() {
     let cfg = AttrConfig {
         blksize: 4096,
         uid, // FIXME
-        gid,  // FIXME
+        gid, // FIXME
     };
     ino_to_attr.insert(ROOT_INODE, gen_dir_attr(&cfg, ROOT_INODE));
     let ino_to_text = HashMap::new();
-    let mut parent_to_entries : HashMap<u64, HashMap<String, u64>> = HashMap::new();
+    let mut parent_to_entries: HashMap<u64, HashMap<String, u64>> = HashMap::new();
     parent_to_entries.insert(ROOT_INODE, HashMap::new());
     let mut ino = ROOT_INODE + 1;
     if let Ok(list) = session.list(None, Some("*")) {
         for mailbox in list.iter() {
-            if let Ok(name) = decode_utf7(mailbox.name()) {
+            if let Ok(name) = decode_modified_utf7(mailbox.name()) {
                 let mut parent_ino = ROOT_INODE;
                 for subdir in name.split('/') {
-                    if let Some(current_ino) = parent_to_entries.get(&parent_ino).unwrap().get(subdir) {
+                    if let Some(current_ino) =
+                        parent_to_entries.get(&parent_ino).unwrap().get(subdir)
+                    {
                         parent_ino = *current_ino;
-                    }
-                    else {
-                        parent_to_entries.get_mut(&parent_ino).unwrap().insert(subdir.to_owned(), ino);
+                    } else {
+                        parent_to_entries
+                            .get_mut(&parent_ino)
+                            .unwrap()
+                            .insert(subdir.to_owned(), ino);
                         parent_to_entries.insert(ino, HashMap::new());
                         ino_to_attr.insert(ino, gen_dir_attr(&cfg, ino));
                         ino += 1;
@@ -356,9 +354,8 @@ async fn main() {
         parent_to_entries,
     };
 
-    Session::new(mount_options
-                 .force_readdir_plus(true).uid(uid).gid(gid))
-    .mount_with_unprivileged(fs, matches.value_of("MOUNTPOINT").unwrap())
-    .await
-    .unwrap()
+    Session::new(mount_options.force_readdir_plus(true).uid(uid).gid(gid))
+        .mount_with_unprivileged(fs, matches.value_of("MOUNTPOINT").unwrap())
+        .await
+        .unwrap()
 }
