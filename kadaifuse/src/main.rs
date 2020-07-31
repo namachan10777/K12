@@ -35,7 +35,7 @@ fn decode_utf7(src: &str) -> Result<String, UTF_7Error> {
                 if *base64_end == i + 1 {
                     buf.push('&');
                 } else {
-                    let decoded_src = base64::decode(src[i + 1..i+*base64_end+1].as_bytes())
+                    let decoded_src = base64::decode(src[i + 1..i+*base64_end+1].replace(',', "/").as_bytes())
                         .map_err(|e| UTF_7Error::InvalidBase64(e))?;
                     let len = decoded_src.len();
                     let mut decoded = io::Cursor::new(decoded_src);
@@ -190,7 +190,6 @@ impl Filesystem for HelloWorld {
 
     async fn open(&self, _req: Request, inode: u64, flags: u32) -> fuse3::Result<ReplyOpen> {
         if self.ino_to_attr.get(&inode).is_some() {
-            info!("opend {}", inode);
             Ok(ReplyOpen { fh: 0, flags })
         } else {
             Err(libc::ENOENT.into())
@@ -228,7 +227,6 @@ impl Filesystem for HelloWorld {
         if self.ino_to_attr.get(&inode).is_some() {
             Ok(())
         } else {
-            info!("invalid access");
             Err(libc::ENOENT.into())
         }
     }
@@ -247,7 +245,6 @@ impl Filesystem for HelloWorld {
                 .iter()
                 .enumerate()
                 .map(|(idx, (name, ino))| {
-                    info!("{:?}", name);
                     DirectoryEntryPlus {
                         inode: *ino,
                         index: idx as u64 + 3,
@@ -276,7 +273,6 @@ fn get_imap_session(
     password: &str,
 ) -> Result<imap::Session<native_tls::TlsStream<std::net::TcpStream>>, String> {
     let tls = native_tls::TlsConnector::builder().build().unwrap();
-    info!("domain: \"{}\"", domain);
     let client = imap::connect((domain, 993), domain, &tls)
         .map_err(|e| format!("cannot connect to server {:?}", e))?;
     client
