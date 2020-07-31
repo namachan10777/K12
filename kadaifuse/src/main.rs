@@ -1,5 +1,8 @@
+use async_std::sync::RwLock;
+use log::info;
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use byteorder::{ReadBytesExt, BE};
@@ -86,16 +89,14 @@ mod test {
     }
 }
 
-const CONTENT: &str = "hello world\n";
-
 const ROOT_INODE: u64 = 1;
 const FILE_MODE: u16 = 0o444;
 const TTL: Duration = Duration::from_secs(1);
 
 struct HelloWorld {
-    ino_to_attr: HashMap<u64, FileAttr>,
-    ino_to_text: HashMap<u64, String>,
-    parent_to_entries: HashMap<u64, HashMap<String, u64>>,
+    ino_to_attr: Arc<RwLock<HashMap<u64, FileAttr>>>,
+    ino_to_text: Arc<RwLock<HashMap<u64, String>>>,
+    parent_to_entries: Arc<RwLock<HashMap<u64, HashMap<String, u64>>>>,
 }
 
 struct AttrConfig {
@@ -152,12 +153,14 @@ impl Filesystem for HelloWorld {
     async fn destroy(&self, _req: Request) {}
 
     async fn lookup(&self, _req: Request, parent: u64, name: &OsStr) -> fuse3::Result<ReplyEntry> {
-        self.parent_to_entries
+        let parent_to_entries = self.parent_to_entries.read().await;
+        let ino_to_attr = self.ino_to_attr.read().await;
+        parent_to_entries
             .get(&parent)
             .map(|entries| name.to_str().map(|fname| entries.get(fname)))
             .flatten()
             .flatten()
-            .map(|ino| self.ino_to_attr.get(&ino))
+            .map(|ino| ino_to_attr.get(&ino))
             .flatten()
             .map(|attr| ReplyEntry {
                 attr: *attr,
@@ -174,7 +177,8 @@ impl Filesystem for HelloWorld {
         _fh: Option<u64>,
         _flags: u32,
     ) -> fuse3::Result<ReplyAttr> {
-        self.ino_to_attr
+        let ino_to_attr = self.ino_to_attr.read().await;
+        ino_to_attr
             .get(&inode)
             .map(|attr| ReplyAttr {
                 ttl: TTL,
@@ -184,7 +188,8 @@ impl Filesystem for HelloWorld {
     }
 
     async fn open(&self, _req: Request, inode: u64, flags: u32) -> fuse3::Result<ReplyOpen> {
-        if self.ino_to_attr.get(&inode).is_some() {
+        let ino_to_attr = self.ino_to_attr.read().await;
+        if ino_to_attr.get(&inode).is_some() {
             Ok(ReplyOpen { fh: 0, flags })
         } else {
             Err(libc::ENOENT.into())
@@ -199,27 +204,31 @@ impl Filesystem for HelloWorld {
         offset: u64,
         size: u32,
     ) -> fuse3::Result<ReplyData> {
-        self.ino_to_text
+        let ino_to_text = self.ino_to_text.read().await;
+        ino_to_text
             .get(&inode)
             .map(|text| {
                 if offset as usize >= text.as_bytes().len() {
-                    let empty = b"";
-                    Box::new(&empty[..])
+                    ReplyData {
+                        data: Box::new(b""),
+                    }
                 } else {
-                    let mut data = &CONTENT.as_bytes()[offset as usize..];
+                    let mut data = &text.as_bytes()[offset as usize..];
 
                     if data.len() > size as usize {
                         data = &data[..size as usize];
                     }
-                    Box::new(data)
+                    ReplyData {
+                        data: Box::new(data.to_vec()),
+                    }
                 }
             })
-            .map(|data| ReplyData { data })
             .ok_or_else(|| libc::ENOENT.into())
     }
 
     async fn access(&self, _req: Request, inode: u64, _mask: u32) -> fuse3::Result<()> {
-        if self.ino_to_attr.get(&inode).is_some() {
+        let ino_to_attr = self.ino_to_attr.read().await;
+        if ino_to_attr.get(&inode).is_some() {
             Ok(())
         } else {
             Err(libc::ENOENT.into())
@@ -235,7 +244,9 @@ impl Filesystem for HelloWorld {
         offset: u64,
         _lock_owner: u64,
     ) -> fuse3::Result<ReplyDirectoryPlus> {
-        let entries = self.parent_to_entries.get(&inode).map(|entries| {
+        let ino_to_attr = self.ino_to_attr.read().await;
+        let parent_to_entries = self.parent_to_entries.read().await;
+        let entries = parent_to_entries.get(&inode).map(|entries| {
             entries
                 .iter()
                 .enumerate()
@@ -245,7 +256,7 @@ impl Filesystem for HelloWorld {
                     kind: FileType::Directory,
                     name: OsString::from(name),
                     generation: 0,
-                    attr: *self.ino_to_attr.get(ino).unwrap(),
+                    attr: *ino_to_attr.get(&ino).unwrap(),
                     attr_ttl: TTL,
                     entry_ttl: TTL,
                 })
@@ -272,6 +283,28 @@ fn get_imap_session(
     client
         .login(username, password)
         .map_err(|_| "cannot login".to_owned())
+}
+
+fn download_messages(
+    session: &mut imap::Session<native_tls::TlsStream<std::net::TcpStream>>,
+    mailbox_name: &str,
+) -> Result<HashMap<String, String>, imap::Error> {
+    session.examine(mailbox_name)?;
+    let mut mails = HashMap::new();
+    for uid in session.uid_search("ALL")? {
+        let messages = session.uid_fetch(uid.to_string(), "RFC822")?;
+        for message in messages.iter() {
+            let parsed_mail = mailparse::parse_mail(message.body().unwrap()).unwrap();
+            for header in &parsed_mail.headers {
+                if &header.get_key() == "Subject" {
+                    info!("subj: {}", header.get_value());
+                    info!("body: {}", parsed_mail.get_body().unwrap());
+                    mails.insert(header.get_value(), parsed_mail.get_body().unwrap());
+                }
+            }
+        }
+    }
+    Ok(mails)
 }
 
 #[async_std::main]
@@ -305,6 +338,7 @@ async fn main() {
     let uid = unsafe { libc::getuid() };
     let gid = unsafe { libc::getgid() };
 
+    info!("uid: {} gid: {}", uid, gid);
     let mount_options = MountOptions::default().uid(uid).gid(gid).read_only(true);
     let mut session = get_imap_session(
         matches.value_of("DOMAIN").unwrap(),
@@ -322,13 +356,19 @@ async fn main() {
         gid, // FIXME
     };
     ino_to_attr.insert(ROOT_INODE, gen_dir_attr(&cfg, ROOT_INODE));
-    let ino_to_text = HashMap::new();
+    let mut ino_to_text = HashMap::new();
     let mut parent_to_entries: HashMap<u64, HashMap<String, u64>> = HashMap::new();
-    parent_to_entries.insert(ROOT_INODE, HashMap::new());
+    let mut root_pre_children = HashMap::new();
+    root_pre_children.insert(".".to_owned(), ROOT_INODE);
+    root_pre_children.insert("..".to_owned(), ROOT_INODE);
+    parent_to_entries.insert(ROOT_INODE, root_pre_children);
     let mut ino = ROOT_INODE + 1;
     if let Ok(list) = session.list(None, Some("*")) {
         for mailbox in list.iter() {
+            let messages = download_messages(&mut session, mailbox.name()).unwrap();
+            let mut mail_mem = HashMap::new();
             if let Ok(name) = decode_modified_utf7(mailbox.name()) {
+                info!("mailbox: {}", name);
                 let mut parent_ino = ROOT_INODE;
                 for subdir in name.split('/') {
                     if let Some(current_ino) =
@@ -340,18 +380,40 @@ async fn main() {
                             .get_mut(&parent_ino)
                             .unwrap()
                             .insert(subdir.to_owned(), ino);
-                        parent_to_entries.insert(ino, HashMap::new());
+                        let mut pre_children = HashMap::new();
+                        pre_children.insert(".".to_owned(), ino);
+                        pre_children.insert("..".to_owned(), parent_ino);
+                        parent_to_entries.insert(ino, pre_children);
                         ino_to_attr.insert(ino, gen_dir_attr(&cfg, ino));
+                        parent_ino = ino;
                         ino += 1;
                     }
+                }
+                for (subj, body) in messages {
+                    ino_to_attr.insert(ino, gen_mail_attr(&cfg, ino, body.len() as u64));
+                    ino_to_text.insert(ino, body);
+                    if let Some(n) = mail_mem.get(&subj).cloned() {
+                        parent_to_entries
+                            .get_mut(&parent_ino)
+                            .unwrap()
+                            .insert(format!("{}({})", subj, n), ino);
+                        mail_mem.insert(subj, n + 1);
+                    } else {
+                        parent_to_entries
+                            .get_mut(&parent_ino)
+                            .unwrap()
+                            .insert(subj.clone(), ino);
+                        mail_mem.insert(subj, 0);
+                    }
+                    ino += 1;
                 }
             }
         }
     }
     let fs = HelloWorld {
-        ino_to_text,
-        ino_to_attr,
-        parent_to_entries,
+        ino_to_text: Arc::new(RwLock::new(ino_to_text)),
+        ino_to_attr: Arc::new(RwLock::new(ino_to_attr)),
+        parent_to_entries: Arc::new(RwLock::new(parent_to_entries)),
     };
 
     Session::new(mount_options.force_readdir_plus(true).uid(uid).gid(gid))
