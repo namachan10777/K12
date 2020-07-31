@@ -329,28 +329,27 @@ async fn main() {
     };
     ino_to_attr.insert(ROOT_INODE, gen_dir_attr(&cfg, ROOT_INODE));
     let ino_to_text = HashMap::new();
-    let mut parent_to_entries = HashMap::new();
+    let mut parent_to_entries : HashMap<u64, HashMap<String, u64>> = HashMap::new();
+    parent_to_entries.insert(ROOT_INODE, HashMap::new());
     let mut ino = ROOT_INODE + 1;
-    let mut root_entries = HashMap::new();
     if let Ok(list) = session.list(None, Some("*")) {
         for mailbox in list.iter() {
-            let entries = HashMap::new();
-            match decode_utf7(mailbox.name()) {
-                Ok(name) => {
-                    info!("mailbox: {}", name);
-                    // FIXME
-                    if name.find('/').is_none() {
-                        root_entries.insert(name, ino);
+            if let Ok(name) = decode_utf7(mailbox.name()) {
+                let mut parent_ino = ROOT_INODE;
+                for subdir in name.split('/') {
+                    if let Some(current_ino) = parent_to_entries.get(&parent_ino).unwrap().get(subdir) {
+                        parent_ino = *current_ino;
                     }
-                },
-                Err(e) => warn!("{} : {:?}", mailbox.name(), e),
+                    else {
+                        parent_to_entries.get_mut(&parent_ino).unwrap().insert(subdir.to_owned(), ino);
+                        parent_to_entries.insert(ino, HashMap::new());
+                        ino_to_attr.insert(ino, gen_dir_attr(&cfg, ino));
+                        ino += 1;
+                    }
+                }
             }
-            parent_to_entries.insert(ino, entries);
-            ino_to_attr.insert(ino, gen_dir_attr(&cfg, ino));
-            ino += 1;
         }
     }
-    parent_to_entries.insert(ROOT_INODE, root_entries);
     let fs = HelloWorld {
         ino_to_text,
         ino_to_attr,
