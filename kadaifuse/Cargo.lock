@@ -141,6 +141,15 @@ dependencies = [
 
 [[package]]
 name = "base64"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b25d992356d2eb0ed82172f5248873db5560c4721f564b13cb5193bda5e668e"
+dependencies = [
+ "byteorder",
+]
+
+[[package]]
+name = "base64"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3441f0f7b02788e948e47f457ca01f1d7e6d92c693bc132c22b087d3141c03ff"
@@ -212,6 +221,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4785bdd1c96b2a846b2bd7cc02e86b6b3dbf14e7e53446c4f54c92a361040822"
 
 [[package]]
+name = "charset"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f426e64df1c3de26cbf44593c6ffff5dbfd43bbf9de0d075058558126b3fc73"
+dependencies = [
+ "base64 0.10.1",
+ "encoding_rs",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -271,6 +290,15 @@ dependencies = [
  "autocfg",
  "cfg-if",
  "lazy_static",
+]
+
+[[package]]
+name = "encoding_rs"
+version = "0.8.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8ac63f94732332f44fe654443c46f6375d1939684c17b0afb6cb56b0456e171"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]
@@ -488,7 +516,7 @@ version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c64075ab776f819eacb2ee2ef31fac1d4e29268c578babccadbc9b6de372e77e"
 dependencies = [
- "base64",
+ "base64 0.12.3",
  "bufstream",
  "chrono",
  "imap-proto",
@@ -522,6 +550,10 @@ version = "0.1.0"
 dependencies = [
  "async-std",
  "async-trait",
+ "base64 0.12.3",
+ "bincode",
+ "byteorder",
+ "charset",
  "clap",
  "env_logger",
  "fuse3",

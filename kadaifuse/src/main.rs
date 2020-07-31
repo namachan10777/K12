@@ -1,8 +1,12 @@
+use log::{info, warn};
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::time::{Duration, SystemTime};
 
+use byteorder::{ReadBytesExt, BE};
 use futures_util::stream;
+use std::char;
+use std::io;
 
 use async_trait::async_trait;
 use fuse3::reply::{
@@ -13,6 +17,69 @@ use fuse3::reply::{
 use fuse3::{FileAttr, FileType, Filesystem, MountOptions, Request, Session};
 
 use clap::{App, Arg};
+
+#[derive(Debug, PartialEq)]
+enum UTF_7Error {
+    InvalidEncoding,
+    InvalidBase64(base64::DecodeError),
+    CannotReadAsU16,
+    InvalidUTF16,
+}
+
+fn decode_utf7(src: &str) -> Result<String, UTF_7Error> {
+    let mut buf = String::new();
+    let mut i = 0;
+    while i < src.len() {
+        if &src[i..i + 1] == "&" {
+            if let Some(base64_end) = &src[i + 1..].find('-') {
+                if *base64_end == i + 1 {
+                    buf.push('&');
+                } else {
+                    let decoded_src = base64::decode(src[i + 1..i+*base64_end+1].as_bytes())
+                        .map_err(|e| UTF_7Error::InvalidBase64(e))?;
+                    let len = decoded_src.len();
+                    let mut decoded = io::Cursor::new(decoded_src);
+                    let mut u16_arr = Vec::new();
+                    let mut cnt = 0;
+                    if len % 2 == 1 {
+                        return Err(UTF_7Error::CannotReadAsU16);
+                    }
+                    while cnt < len {
+                        cnt += 2;
+                        u16_arr.push(
+                            decoded
+                                .read_u16::<BE>()
+                                .map_err(|_| UTF_7Error::CannotReadAsU16)?,
+                        );
+                    }
+                    buf.push_str(
+                        &char::decode_utf16(u16_arr)
+                            .map(|c| c.map_err(|_| UTF_7Error::InvalidUTF16))
+                            .collect::<Result<String, UTF_7Error>>()?,
+                    );
+                    i += base64_end+2;
+                }
+            } else {
+                return Err(UTF_7Error::InvalidEncoding);
+            }
+        }
+        else {
+            buf.push_str(&src[i..i+1]);
+            i += 1;
+        }
+    }
+    Ok(buf)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn test_utf7() {
+        assert_eq!(Ok("削除済みアイテム".to_owned()), decode_utf7("&UkqWZG4IMH8wojCkMMYw4A-"));
+        assert_eq!(Ok("Tohbmoho-/日本の休日".to_owned()), decode_utf7("Tohbmoho-/&ZeVnLDBuTxFl5Q-"));
+    }
+}
 
 const CONTENT: &str = "hello world\n";
 
@@ -123,6 +190,7 @@ impl Filesystem for HelloWorld {
 
     async fn open(&self, _req: Request, inode: u64, flags: u32) -> fuse3::Result<ReplyOpen> {
         if self.ino_to_attr.get(&inode).is_some() {
+            info!("opend {}", inode);
             Ok(ReplyOpen { fh: 0, flags })
         } else {
             Err(libc::ENOENT.into())
@@ -242,17 +310,19 @@ impl Filesystem for HelloWorld {
             entries
                 .iter()
                 .enumerate()
-                .map(|(idx, (name, ino))| DirectoryEntryPlus {
-                    inode: *ino,
-                    index: idx as u64 + 3,
-                    kind: FileType::Directory,
-                    name: OsString::from(name),
-                    generation: 0,
-                    attr: *self.ino_to_attr.get(ino).unwrap(),
-                    attr_ttl: TTL,
-                    entry_ttl: TTL,
-                })
-                .collect::<Vec<DirectoryEntryPlus>>()
+                .map(|(idx, (name, ino))| {
+                    info!("{:?}", name);
+                    DirectoryEntryPlus {
+                        inode: *ino,
+                        index: idx as u64 + 3,
+                        kind: FileType::Directory,
+                        name: OsString::from(name),
+                        generation: 0,
+                        attr: *self.ino_to_attr.get(ino).unwrap(),
+                        attr_ttl: TTL,
+                        entry_ttl: TTL,
+                    }
+                }).collect::<Vec<DirectoryEntryPlus>>()
         });
         if let Some(mut entries) = entries {
             basic.append(&mut entries);
@@ -269,6 +339,20 @@ impl Filesystem for HelloWorld {
     }
 }
 
+fn get_imap_session(
+    domain: &str,
+    username: &str,
+    password: &str,
+) -> Result<imap::Session<native_tls::TlsStream<std::net::TcpStream>>, String> {
+    let tls = native_tls::TlsConnector::builder().build().unwrap();
+    info!("domain: \"{}\"", domain);
+    let client = imap::connect((domain, 993), domain, &tls)
+        .map_err(|e| format!("cannot connect to server {:?}", e))?;
+    client
+        .login(username, password)
+        .map_err(|_| "cannot login".to_owned())
+}
+
 #[async_std::main]
 async fn main() {
     env_logger::init();
@@ -277,18 +361,21 @@ async fn main() {
         .arg(
             Arg::with_name("DOMAIN")
                 .required(true)
+                .takes_value(true)
                 .short("d")
                 .long("domain"),
         )
         .arg(
             Arg::with_name("USERNAME")
                 .required(true)
+                .takes_value(true)
                 .short("n")
                 .long("username"),
         )
         .arg(
             Arg::with_name("PASSWORD")
                 .required(true)
+                .takes_value(true)
                 .short("p")
                 .long("password"),
         )
@@ -298,6 +385,12 @@ async fn main() {
     let gid = unsafe { libc::getgid() };
 
     let mount_options = MountOptions::default().uid(uid).gid(gid).read_only(true);
+    let mut session = get_imap_session(
+        matches.value_of("DOMAIN").unwrap(),
+        matches.value_of("USERNAME").unwrap(),
+        matches.value_of("PASSWORD").unwrap(),
+    )
+    .unwrap();
 
     let mut ino_to_attr = HashMap::new();
     let cfg = AttrConfig {
@@ -308,7 +401,27 @@ async fn main() {
     ino_to_attr.insert(ROOT_INODE, gen_dir_attr(&cfg, ROOT_INODE));
     let ino_to_text = HashMap::new();
     let mut parent_to_entries = HashMap::new();
-    parent_to_entries.insert(ROOT_INODE, HashMap::new());
+    let mut ino = ROOT_INODE + 1;
+    let mut root_entries = HashMap::new();
+    if let Ok(list) = session.list(None, Some("*")) {
+        for mailbox in list.iter() {
+            let entries = HashMap::new();
+            match decode_utf7(mailbox.name()) {
+                Ok(name) => {
+                    info!("mailbox: {}", name);
+                    // FIXME
+                    if name.find('/').is_none() {
+                        root_entries.insert(name, ino);
+                    }
+                },
+                Err(e) => warn!("{} : {:?}", mailbox.name(), e),
+            }
+            parent_to_entries.insert(ino, entries);
+            ino_to_attr.insert(ino, gen_dir_attr(&cfg, ino));
+            ino += 1;
+        }
+    }
+    parent_to_entries.insert(ROOT_INODE, root_entries);
     let fs = HelloWorld {
         ino_to_text,
         ino_to_attr,
@@ -316,7 +429,7 @@ async fn main() {
     };
 
     Session::new(mount_options)
-        .mount_with_unprivileged(fs, matches.value_of("MOUNTPOINT").unwrap())
-        .await
-        .unwrap()
+    .mount_with_unprivileged(fs, matches.value_of("MOUNTPOINT").unwrap())
+    .await
+    .unwrap()
 }
