@@ -295,11 +295,15 @@ fn download_messages(
         let messages = session.uid_fetch(uid.to_string(), "RFC822")?;
         for message in messages.iter() {
             let parsed_mail = mailparse::parse_mail(message.body().unwrap()).unwrap();
+            info!("{}", String::from_utf8_lossy(message.body().unwrap()));
             for header in &parsed_mail.headers {
                 if &header.get_key() == "Subject" {
+                    let mut body = parsed_mail.get_body().unwrap();
+                    for b in &parsed_mail.subparts {
+                        body.push_str(&b.get_body().unwrap_or(String::new()));
+                    }
                     info!("subj: {}", header.get_value());
-                    info!("body: {}", parsed_mail.get_body().unwrap());
-                    mails.insert(header.get_value(), parsed_mail.get_body().unwrap());
+                    mails.insert(header.get_value(), body);
                 }
             }
         }
