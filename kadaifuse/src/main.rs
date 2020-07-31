@@ -224,53 +224,11 @@ impl Filesystem for HelloWorld {
             .ok_or_else(|| libc::ENOENT.into())
     }
 
-    async fn readdir(
-        &self,
-        _req: Request,
-        inode: u64,
-        _fh: u64,
-        offset: i64,
-    ) -> fuse3::Result<ReplyDirectory> {
-        let mut basic = vec![
-            DirectoryEntry {
-                inode,
-                index: 1,
-                kind: FileType::Directory,
-                name: OsString::from("."),
-            },
-            DirectoryEntry {
-                inode: ROOT_INODE, // All directories can be a root or a mailbox.
-                index: 2,
-                kind: FileType::Directory,
-                name: OsString::from(".."),
-            },
-        ];
-        let entries = self.parent_to_entries.get(&inode).map(|entries| {
-            entries
-                .iter()
-                .enumerate()
-                .map(|(idx, (name, ino))| DirectoryEntry {
-                    inode: *ino,
-                    index: idx as u64 + 3,
-                    kind: FileType::Directory,
-                    name: OsString::from(name),
-                })
-                .collect::<Vec<DirectoryEntry>>()
-        });
-        if let Some(mut entries) = entries {
-            basic.append(&mut entries);
-            Ok(ReplyDirectory {
-                entries: Box::pin(stream::iter(entries.into_iter().skip(offset as usize))),
-            })
-        } else {
-            Err(libc::ENOENT.into())
-        }
-    }
-
     async fn access(&self, _req: Request, inode: u64, _mask: u32) -> fuse3::Result<()> {
         if self.ino_to_attr.get(&inode).is_some() {
             Ok(())
         } else {
+            info!("invalid access");
             Err(libc::ENOENT.into())
         }
     }
@@ -284,28 +242,6 @@ impl Filesystem for HelloWorld {
         offset: u64,
         _lock_owner: u64,
     ) -> fuse3::Result<ReplyDirectoryPlus> {
-        let mut basic = vec![
-            DirectoryEntryPlus {
-                inode,
-                index: 1,
-                kind: FileType::Directory,
-                name: OsString::from("."),
-                generation: 0,
-                attr: *self.ino_to_attr.get(&inode).unwrap(),
-                attr_ttl: TTL,
-                entry_ttl: TTL,
-            },
-            DirectoryEntryPlus {
-                inode: ROOT_INODE, // All directories can be a root or a mailbox.
-                index: 2,
-                attr: *self.ino_to_attr.get(&ROOT_INODE).unwrap(),
-                attr_ttl: TTL,
-                entry_ttl: TTL,
-                generation: 0,
-                kind: FileType::Directory,
-                name: OsString::from(".."),
-            },
-        ];
         let entries = self.parent_to_entries.get(&inode).map(|entries| {
             entries
                 .iter()
@@ -324,18 +260,13 @@ impl Filesystem for HelloWorld {
                     }
                 }).collect::<Vec<DirectoryEntryPlus>>()
         });
-        if let Some(mut entries) = entries {
-            basic.append(&mut entries);
+        if let Some(entries) = entries {
             Ok(ReplyDirectoryPlus {
                 entries: Box::pin(stream::iter(entries.into_iter().skip(offset as usize))),
             })
         } else {
             Err(libc::ENOENT.into())
         }
-    }
-
-    async fn statsfs(&self, _req: Request, _inode: u64) -> fuse3::Result<ReplyStatFs> {
-        Ok(STATFS)
     }
 }
 
@@ -393,10 +324,12 @@ async fn main() {
     .unwrap();
 
     let mut ino_to_attr = HashMap::new();
+    let uid = unsafe { libc::getuid() };
+    let gid = unsafe { libc::getgid() };
     let cfg = AttrConfig {
         blksize: 4096,
-        uid: 501, // FIXME
-        gid: 20,  // FIXME
+        uid, // FIXME
+        gid,  // FIXME
     };
     ino_to_attr.insert(ROOT_INODE, gen_dir_attr(&cfg, ROOT_INODE));
     let ino_to_text = HashMap::new();
@@ -428,7 +361,8 @@ async fn main() {
         parent_to_entries,
     };
 
-    Session::new(mount_options)
+    Session::new(mount_options
+                 .force_readdir_plus(true).uid(uid).gid(gid))
     .mount_with_unprivileged(fs, matches.value_of("MOUNTPOINT").unwrap())
     .await
     .unwrap()
