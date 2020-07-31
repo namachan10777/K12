@@ -125,15 +125,15 @@ fn gen_dir_attr(cfg: &AttrConfig, ino: u64) -> FileAttr {
 }
 
 #[allow(dead_code)]
-fn gen_mail_attr(cfg: &AttrConfig, ino: u64, size: u64) -> FileAttr {
+fn gen_mail_attr(cfg: &AttrConfig, ino: u64, size: u64, time: SystemTime) -> FileAttr {
     FileAttr {
         ino,
         generation: 0,
         size,
         blocks: ((size as i64 - 1) / cfg.blksize as i64) as u64,
-        atime: SystemTime::now(),
-        mtime: SystemTime::now(),
-        ctime: SystemTime::now(),
+        atime: time,
+        mtime: time,
+        ctime: time,
         kind: FileType::RegularFile,
         perm: FILE_MODE,
         nlink: 0,
@@ -288,24 +288,31 @@ fn get_imap_session(
 fn download_messages(
     session: &mut imap::Session<native_tls::TlsStream<std::net::TcpStream>>,
     mailbox_name: &str,
-) -> Result<HashMap<String, String>, imap::Error> {
+) -> Result<HashMap<String, (String, SystemTime)>, imap::Error> {
     session.examine(mailbox_name)?;
     let mut mails = HashMap::new();
     for uid in session.uid_search("ALL")? {
         let messages = session.uid_fetch(uid.to_string(), "RFC822")?;
         for message in messages.iter() {
             let parsed_mail = mailparse::parse_mail(message.body().unwrap()).unwrap();
-            info!("{}", String::from_utf8_lossy(message.body().unwrap()));
+            let mut subj = String::new();
+            let mut body = parsed_mail.get_body().unwrap();
+            let mut time = SystemTime::now();
+            for b in &parsed_mail.subparts {
+                body.push_str(&b.get_body().unwrap_or_default());
+            }
             for header in &parsed_mail.headers {
                 if &header.get_key() == "Subject" {
-                    let mut body = parsed_mail.get_body().unwrap();
-                    for b in &parsed_mail.subparts {
-                        body.push_str(&b.get_body().unwrap_or(String::new()));
-                    }
-                    info!("subj: {}", header.get_value());
-                    mails.insert(header.get_value(), body);
+                    subj = header.get_value();
+                }
+                if &header.get_key() == "Date" {
+                    let tz_pattern = regex::Regex::new(r"\(.*\)").unwrap();
+                    time = SystemTime::from(
+                        chrono::DateTime::parse_from_rfc2822(&tz_pattern.replace(&header.get_value(), "").to_string().trim_end()).unwrap(),
+                    );
                 }
             }
+            mails.insert(subj, (body, time));
         }
     }
     Ok(mails)
@@ -388,13 +395,12 @@ async fn main() {
                         pre_children.insert(".".to_owned(), ino);
                         pre_children.insert("..".to_owned(), parent_ino);
                         parent_to_entries.insert(ino, pre_children);
-                        ino_to_attr.insert(ino, gen_dir_attr(&cfg, ino));
                         parent_ino = ino;
                         ino += 1;
                     }
                 }
-                for (subj, body) in messages {
-                    ino_to_attr.insert(ino, gen_mail_attr(&cfg, ino, body.len() as u64));
+                for (subj, (body, time)) in messages {
+                    ino_to_attr.insert(ino, gen_mail_attr(&cfg, ino, body.len() as u64, time));
                     ino_to_text.insert(ino, body);
                     if let Some(n) = mail_mem.get(&subj).cloned() {
                         parent_to_entries
@@ -411,6 +417,7 @@ async fn main() {
                     }
                     ino += 1;
                 }
+                ino_to_attr.insert(parent_ino, gen_dir_attr(&cfg, parent_ino));
             }
         }
     }

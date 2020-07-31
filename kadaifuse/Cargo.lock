@@ -554,6 +554,7 @@ dependencies = [
  "bincode",
  "byteorder",
  "charset",
+ "chrono",
  "clap",
  "env_logger",
  "fuse3",
@@ -565,6 +566,7 @@ dependencies = [
  "mio",
  "native-tls",
  "pretty_env_logger",
+ "regex",
  "tempfile",
 ]
 
