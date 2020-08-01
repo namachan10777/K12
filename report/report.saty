@@ -1,0 +1,105 @@
+@import: coins.satyh/coins-report
+
+document(|
+  title = {K12 カーネルハック};
+  author = {中野 将生};
+  faculty = {情報};
+  department = {情報科};
+  id = 202013553;
+|) '<
+  +chapter{開発環境} <
+    +p{
+      % TODO 表
+    }
+    +p{
+      % TODO 解説
+    }
+  >
+  +chapter{課題1} <
+    +p{
+      % TODO 手順
+    }
+  >
+  +chapter{課題2} <
+    % TODO LinuxのGDBサポートもう一回調べて動かす
+    +p{
+      % TODO 手順
+    }
+  >
+  +chapter{課題3} <
+    +section{仕様}<
+      +subsection{名前}<
+      >
+      +subsection{書式}<
+      >
+      +subsection{説明}<
+      >
+      +subsection{返り値}<
+      >
+      +subsection{エラー}<
+      >
+    >
+    +section{実験方法}<
+    >
+    +section{実行例}<
+    >
+    +section{プログラム}<
+    >
+  >
+  +chapter{課題4} <
+    +section{仕様}<
+      +subsection{名前}<
+      >
+      +subsection{説明}<
+      >
+      +subsection{API}<
+      >
+      +subsection{エラー}<
+      >
+    >
+    +section{実験方法}<
+    >
+    +section{実行例}<
+    >
+    +section{プログラム}<
+    >
+  >
+  +chapter{課題8} <
+    +section{仕様}<
+      +subsection{名前}<
+      >
+      +subsection{説明}<
+      >
+      +subsection{API}<
+      >
+      +subsection{エラー}<
+      >
+    >
+    +section{実験方法}<
+    >
+    +section{実行例}<
+    >
+    +section{プログラム}<
+    >
+  >
+  +chapter{課題11-課題3} <
+    +section{仕様}<
+      +subsection{名前}<
+      >
+      +subsection{書式}<
+      >
+      +subsection{説明}<
+      >
+      +subsection{返り値}<
+      >
+      +subsection{エラー}<
+      >
+    >
+    +section{実行例}<
+    >
+  >
+  +chapter{感想}<
+  >
+  +appendix{参考文献}<
+  >
+>
