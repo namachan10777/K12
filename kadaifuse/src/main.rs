@@ -312,7 +312,7 @@ fn download_messages(
                     );
                 }
             }
-            mails.insert(subj, (body, time));
+            mails.insert(subj.replace('/', "_").to_owned(), (body, time));
         }
     }
     Ok(mails)
