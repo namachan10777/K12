@@ -1,11 +1,16 @@
 #!/bin/bash
+
+GDBPORT=10000
 SSHPORT=10022
+
+echo "gdb port:"$GDBPORT
+echo "ssh port:"$SSHPORT
 
 qemu-system-x86_64 \
 	--enable-kvm \
 	-m 4096 \
-	-boot c \
+	-boot order=d \
 	-bios /usr/share/ovmf/x64/OVMF.fd \
-	-cdrom $1 \
+	-gdb tcp::$GDBPORT \
 	-net user,hostfwd=tcp::$SSHPORT-:22 -net nic \
-	-hda ./freebsd
+	./linux.qcow2

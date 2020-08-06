@@ -2,3 +2,5 @@
 /vm/K12
 /vm/OVMF.fd
 /vm/*.iso
+/vm/*.img
+/vm/*.qcow2
