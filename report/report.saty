@@ -9,41 +9,345 @@ document(|
 |) '<
   +chapter{開発環境} <
     +p{
-      % TODO 表
+      開発に使用しているカーネルはLinux 5.7.10-arch1-1 SMP PREEMPT Wed, 22 Jul 2020 19:57:42 +0000 x86_64 GNU/Linuxであり、使用したgccは10.1.0である。
+      今回実験に用いた仮想マシンのカーネルは5.7.0で、qemuを用いて実行した。
+      qemuのバージョンは5.0.0を使用した。
+      gdbのバージョンは9.2である。
     }
     +p{
-      % TODO 解説
+      私は主にLinux環境で作業を行っており、CLIから操作しやすいこと、
+      自作OS等での使用者が多いことからQEMUを用いて実験を行った。
     }
   >
   +chapter{課題1} <
     +p{
-      % TODO 手順
+      LinuxではFreeBSDなどとは異なり、
+      カーネル及びデバイスドライバのソースコードのみをLinuxチームが開発しており、
+      これは`kernel.org`で配布されている。
+      今回は簡単のためGitHubにあるLinuxカーネルのミラーを自身のリポジトリへとフォークし、
+      それをローカルにクローンして実験を行った。
+    }
+    +p{
+      まずデフォルトのビルド設定を生成するために`make defconfig`を実行し、
+      その後`make menuconfig`を実行した。
+      初回のビルドなので特に変更は行わず、
+      そのまま`make tar-pkg -j8`を行い一式をビルドした。
     }
   >
   +chapter{課題2} <
-    % TODO LinuxのGDBサポートもう一回調べて動かす
     +p{
-      % TODO 手順
+      LinuxカーネルをGDBを用いてデバッグするには、セキュリティのため設定されているカーネルイメージのアドレス空間配置のランダム化（kernel address space layout randomization: KASLR）を切っておく必要がある。
+      menuconfigでProcessor type and featuresのRandomize the address of the kernel image （KASLR）から解除できる。
+      加えてKernel hackingのKernel debuggingも設定する。
+      また、`vmlinux`にシンボル情報を含めるため、
+      同じくKernel HackingのCompile-time checks and optionsからCompile the kernel with debug infoを設定する。
+    }
+    +p{
+      実際にGDBを接続する前に、LinuxがGDBでのデバッグのために提供しているスクリプトを利用することが出来る。
+      一部のLinuxディストリビューションでは登録してないディレクトリでのスクリプトの自動ロードが許されていないので、
+      `~/.gdbinit`に`add-auto-load-safe-path`を設定する必要がある。
+      また、エミュレータがGDBサーバを提供するようエミュレータを適切に設定する必要がある。
+      qemuの場合は`-gdb`オプションにて設定する。
+    }
+    +p{
+      本実験で用いた起動スクリプトは以下となる。
+      UEFIのファームウェアにはOVMFを用いた。
+      ここでの`./linux.qcow2`とはQCOW2形式のArch Linuxをインストールしたイメージファイルである。
+      カーネルはホスト環境でコンパイルしたものをrsyncにより転送して入れ替えてある。
+    }
+    +code(```
+      #!/bin/bash
+
+      GDBPORT=10000
+      SSHPORT=10022
+
+      echo "gdb port:"$GDBPORT
+      echo "ssh port:"$SSHPORT
+
+      qemu-system-x86_64 \
+        --enable-kvm \
+        -m 4096 \
+        -boot order=d \
+        -bios /usr/share/ovmf/x64/OVMF.fd \
+        -gdb tcp::$GDBPORT \
+        -net user,hostfwd=tcp::$SSHPORT-:22 -net nic \
+        ./linux.qcow2
+    ```);
+    +p{
+      \figure {GDB Screenshot} <
+        +centered-pdf(15cm)(`./fig/gdb-screenshot.pdf`)(1);
+      >
+      `$gdb ./vmlinux`としてデバッグシンボルを読み込んだ状態でGDBを起動し、
+      `target remote :10000`でqemuと接続する。
+      以降は通常のGDBデバッグと同様である。
+      \ref-fig(`gdb-screenshot`);
+      に`__x64_sys_getppid`にブレークポイントを設定し、実際にブレークしたときのスクリーンショットを記載する。
+      % TODO システムコールの動作を簡単に説明
     }
   >
   +chapter{課題3} <
     +section{仕様}<
       +subsection{名前}<
+        +p{
+          caesar_encryptは与えられた文字をバイト毎に指定した量だけシフトした文字に置き換える機能を提供する。
+        }
       >
       +subsection{書式}<
+        +code(```
+        int caesar_encrypt(size_t shift, char *buf, size_t count);
+        ```);
       >
       +subsection{説明}<
+        +p{
+          \it{buf}を与えると各文字について\it{shift}だけシフトした文字で置き換える。
+          \it{shift}は非負整数で与えられ、シフトした結果zを超えた場合はaへと戻る。
+          このシフト操作は小文字は小文字の範囲内、大文字は大文字の範囲内で行われ、
+          記号等はこのシフトされない。
+        }
       >
       +subsection{返り値}<
+        +p{
+          成功した場合は0が返され、
+          失敗した場合はエラー番号が返される。
+        }
       >
       +subsection{エラー}<
+        +desc {EFAULT} {
+          内部でのメモリ確保及びユーザ空間とカーネル空間の間でのメモリコピーに失敗した
+        }
+        +desc {EINVAL} {
+          ASCIIに含まれていない0x80以降の文字を検出した場合
+        }
       >
     >
     +section{実験方法}<
+      +p{
+        kernel直下に`toy`ディレクトリを作成し、
+        そこにシステムコールの実装を記述した`toy.c`ファイルを作成した。
+        このファイルをコンパイル対象に含めるため、ルートのMakefileを修正し`core-y`に`toy`を追加した。
+      }
     >
     +section{実行例}<
+      +p{
+        下記のソースコードを用いた。
+      }
+      +code(```
+        #include <unistd.h>
+        #include <stdio.h>
+
+        int main() {
+          char buf[] = "Hello World!";
+          int e1 = syscall(439, 1, buf, sizeof(buf));
+          printf("e1: %d\n", e1);
+          printf("%s\n", buf);
+
+          int e2 = syscall(439, 26, buf, sizeof(buf));
+          printf("e2: %d\n", e2);
+          printf("%s\n", buf);
+
+          char invalidbuf[] = {1,2,3};
+          int e3 = syscall(439, 1, invalidbuf, 1000000000000000);
+          printf("e3: %d\n", e3);
+
+          int e4 = syscall(439, 1, NULL, sizeof(buf));
+          printf("e4: %d\n", e4);
+          printf("%s\n", buf);
+
+          buf[3] = 0x80;
+          int e5 = syscall(439, 1, buf, sizeof(buf));
+          printf("e5: %d\n", e5);
+          printf("%s\n", buf);
+
+          char *dummy;
+          int e6 = syscall(439, 1, dummy, sizeof(buf));
+          printf("e6: %d\n", e6);
+        }
+      ```);
+      +p{
+        以下が実行結果となる。
+      }
+      +code(```
+        e1: 0
+        Ifmmp Xpsme!
+        e2: 0
+        Hello World!
+        e3: 14
+        e4: 14
+        Hello World!
+        e5: 22
+        Helo World!
+        e6: 22
+      ```);
+      +p{
+        e1では1字シフトを行っている。これは成功しているので0を返している。
+        e2では更に26字分シフトを行い、一周させることで復号を行っている。
+        e3では終端文字を含まない文字列を用意し、過大なメモリ長を指定することで
+        EFAULTを起こしている。
+        e4はNULLをバッファとして指定したものであり、これも同様にEFAULTが返る。
+        e5は一文字非ASCIIを含めており、これはEINVALが返る。
+        e6では未初期化のポインタを与えており、
+        NULLの場合と同様EFAULTが返る。
+      }
     >
     +section{プログラム}<
+      +subsection{`/toy/toy.c`}<
+        +code(```
+          #include <linux/syscalls.h>
+          #include <linux/uaccess.h>
+          #include <linux/vmalloc.h>
+
+          SYSCALL_DEFINE3(caesar_encrypt, unsigned int, shift, unsigned char __user *, userbuf, size_t, count) {
+            size_t i;
+            unsigned char *buf;
+            long copied_count, failed_to_return_count;
+
+            if (!access_ok(userbuf, count)) {
+              return EFAULT;
+            }
+            buf = kmalloc(sizeof(unsigned char) * count, GFP_KERNEL);
+            copied_count = strncpy_from_user(buf, userbuf, count);
+            if (copied_count < 0) {
+              printk ("[ caesar_encrypt ] COPY ERROR \n");
+              kfree(buf);
+              return EFAULT;
+            }
+            for (i=0; i<count; ++i) {
+              unsigned char c = buf[i];
+              if (c >= 0x41 && c <= 0x5a) {
+                buf[i] = ((c - 0x41 + shift) % 27) + 0x41;
+              }
+              else if (c >= 0x61 && c <= 0x7a) {
+                buf[i] = ((c - 0x61 + shift) % 27) + 0x61;
+              }
+              else if (c == 0) {
+                break;
+              }
+              else if (c > 0x7f) {
+                return EINVAL;
+              }
+            }
+
+            failed_to_return_count = copy_to_user(userbuf, buf, sizeof(unsigned char) * copied_count);
+            if (failed_to_return_count != 0) {
+              kfree(buf);
+              printk ("[ caesar_encrypt ] COPY ERROR \n");
+              printk ("[ caesar_encrypt ] bytes failed to return : %ld\n", failed_to_return_count);
+              return EFAULT;
+            }
+            return 0;
+          }
+        ```);
+      >
+      +subsection{`/toy/Makefile`} <
+        +code(```
+          obj-y := toy.o
+        ```);
+      >
+      +subsection{`/Makefile`} <
+        +code(```
+          iff --git a/Makefile b/Makefile
+          index 11fe9b1535de..f4e86dfdb574 100644
+          --- a/Makefile
+          +++ b/Makefile
+          @@ -1041,7 +1041,7 @@ export MODORDER := $(extmod-prefix)modules.order
+           export MODULES_NSDEPS := $(extmod-prefix)modules.nsdeps
+
+           ifeq ($(KBUILD_EXTMOD),)
+          -core-y         += kernel/ certs/ mm/ fs/ ipc/ security/ crypto/ block/
+          +core-y         += kernel/ certs/ mm/ fs/ ipc/ security/ crypto/ block/ toy/
+
+           vmlinux-dirs   := $(patsubst %/,%,$(filter %/, $(init-y) $(init-m) \
+                               $(core-y) $(core-m) $(drivers-y) $(drivers-m) \
+        ```);
+      >
+      +subsection{`/arch/x86/entry/syscalls/syscalls_32.tbl`} <
+        +code(```
+          diff --git a/arch/x86/entry/syscalls/syscall_32.tbl b/arch/x86/entry/syscalls/syscall_32.tbl
+          index 54581ac671b4..f34b7c222e78 100644
+          --- a/arch/x86/entry/syscalls/syscall_32.tbl
+          +++ b/arch/x86/entry/syscalls/syscall_32.tbl
+          @@ -442,3 +442,4 @@
+           435	i386	clone3			sys_clone3
+           437	i386	openat2			sys_openat2
+           438	i386	pidfd_getfd		sys_pidfd_getfd
+          +439 i386	caesar_encrypt	sys_caesar_encrypt
+        ```);
+      >
+      +subsection{`/arch/x86/entry/syscalls/syscall_64.tbl`}<
+        +code(```
+          diff --git a/arch/x86/entry/syscalls/syscall_64.tbl b/arch/x86/entry/syscalls/syscall_64.tbl
+          index 37b844f839bc..eacf71228efe 100644
+          --- a/arch/x86/entry/syscalls/syscall_64.tbl
+          +++ b/arch/x86/entry/syscalls/syscall_64.tbl
+          @@ -359,6 +359,7 @@
+           435	common	clone3			sys_clone3
+           437	common	openat2			sys_openat2
+           438	common	pidfd_getfd		sys_pidfd_getfd
+          +439 common	caesar_encrypt	sys_caesar_encrypt
+
+           #
+           # x32-specific system call numbers start at 512 to avoid cache impact
+        ```);
+      >
+      +subsection{`/include/linux/syscalls.h`} <
+        +code(```
+          diff --git a/include/linux/syscalls.h b/include/linux/syscalls.h
+          index 1815065d52f3..2b926ee3626a 100644
+          --- a/include/linux/syscalls.h
+          +++ b/include/linux/syscalls.h
+          @@ -1003,7 +1003,7 @@ asmlinkage long sys_pidfd_send_signal(int pidfd, int sig,
+                         siginfo_t __user *info,
+                         unsigned int flags);
+           asmlinkage long sys_pidfd_getfd(int pidfd, int fd, unsigned int flags);
+          -
+          +asmlinkage long sys_caesar_encrypt(unsigned int shift, char __user *buf, size_t count);
+           /*
+            * Architecture-specific system calls
+            */
+        ```);
+      >
+      +subsection{`/include/uapi/asm-generic/unistd.h`} <
+        +code(```
+          diff --git a/include/uapi/asm-generic/unistd.h b/include/uapi/asm-generic/unistd.h
+          index 3a3201e4618e..540412fc4bc3 100644
+          --- a/include/uapi/asm-generic/unistd.h
+          +++ b/include/uapi/asm-generic/unistd.h
+          @@ -855,9 +855,11 @@ __SYSCALL(__NR_clone3, sys_clone3)
+           __SYSCALL(__NR_openat2, sys_openat2)
+           #define __NR_pidfd_getfd 438
+           __SYSCALL(__NR_pidfd_getfd, sys_pidfd_getfd)
+          +#define __NR_caesar_encrypt 439
+          +__SYSCALL(__NR_caesar_encrypt, sys_caesar_encrypt)
+
+           #undef __NR_syscalls
+          -#define __NR_syscalls 439
+          +#define __NR_syscalls 440
+
+           /*
+            * 32 bit systems traditionally used different
+        ```);
+      >
+      +subsection{`/tools/include/uapi/asm-generic/unistd.h`} <
+        +code(```
+        diff --git a/tools/include/uapi/asm-generic/unistd.h b/tools/include/uapi/asm-generic/unistd.h
+        index 3a3201e4618e..540412fc4bc3 100644
+        --- a/tools/include/uapi/asm-generic/unistd.h
+        +++ b/tools/include/uapi/asm-generic/unistd.h
+        @@ -855,9 +855,11 @@ __SYSCALL(__NR_clone3, sys_clone3)
+         __SYSCALL(__NR_openat2, sys_openat2)
+         #define __NR_pidfd_getfd 438
+         __SYSCALL(__NR_pidfd_getfd, sys_pidfd_getfd)
+        +#define __NR_caesar_encrypt 439
+        +__SYSCALL(__NR_caesar_encrypt, sys_caesar_encrypt)
+
+         #undef __NR_syscalls
+        -#define __NR_syscalls 439
+        +#define __NR_syscalls 440
+
+         /*
+          * 32 bit systems traditionally used different
+        ```);
+      >
     >
   >
   +chapter{課題4} <
